@@ -50,6 +50,18 @@ Go to the [Releases](../../releases) page and download the latest `PredatorContr
 
 This app communicates directly with Acer's WMI driver (which is part of Windows, not PredatorSense), so you can safely disable PredatorSense and all its background services.
 
+### Step 0 — Configure Custom Fans (Do this first!)
+
+Since setting arbitrary custom fan speeds dynamically via WMI is extremely complex and model-dependent, this app commands the driver to switch to the hardware **"Custom"** fan profile, which inherits whatever custom fan speed or curve was last saved on the system.
+
+Before disabling PredatorSense:
+1. Open **PredatorSense**.
+2. Go to **Fan Control** and set your **Custom** fan speeds or curves exactly as you want them.
+3. Apply the settings.
+4. Close PredatorSense. 
+
+Once set, our app's **Custom** fan setting will use this saved curve even after PredatorSense is completely disabled.
+
 ### Step 1 — Disable PredatorSense Services
 
 Open **Services** (`Win + R` → type `services.msc` → Enter) and set the following services to **Disabled**:
