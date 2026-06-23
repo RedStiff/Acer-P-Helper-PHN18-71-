@@ -247,7 +247,7 @@ namespace PredatorControlApp
 
         private void SetupSystemTray()
         {
-            try { _trayIcon.Icon = new Icon("appicon.ico"); }
+            try { _trayIcon.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
             catch { _trayIcon.Icon = SystemIcons.Application; }
 
             _trayIcon.ContextMenuStrip = _trayMenu;
@@ -320,7 +320,7 @@ namespace PredatorControlApp
             this.ClientSize = new Size(_formW, S(880));
             this.FormBorderStyle = FormBorderStyle.None;
             this.StartPosition = FormStartPosition.CenterScreen;
-            try { this.Icon = new Icon("appicon.ico"); } catch { }
+            try { this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
             int pad = S(24);
             int contentW = _formW - pad * 2;
@@ -331,7 +331,8 @@ namespace PredatorControlApp
             var pnlTitle = new Panel { Height = S(40), Width = _formW, BackColor = Color.FromArgb(18, 18, 21) };
             pnlTitle.MouseDown += TitleBar_MouseDown;
             this.Controls.Add(pnlTitle);
-            var picIcon = new PictureBox { Image = new Icon("appicon.ico").ToBitmap(), SizeMode = PictureBoxSizeMode.Zoom, Size = new Size(S(16), S(16)), Location = new Point(pad - S(4), S(12)), BackColor = Color.Transparent };
+            var picIcon = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, Size = new Size(S(16), S(16)), Location = new Point(pad - S(4), S(12)), BackColor = Color.Transparent };
+            try { var extIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); if (extIcon != null) picIcon.Image = extIcon.ToBitmap(); } catch { }
             picIcon.MouseDown += TitleBar_MouseDown;
             pnlTitle.Controls.Add(picIcon);
 
