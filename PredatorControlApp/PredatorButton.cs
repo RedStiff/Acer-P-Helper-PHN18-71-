@@ -12,17 +12,6 @@ namespace PredatorControlApp
         private bool _isActive;
         private Color? _customActiveColor;
 
-        private static readonly Color BgNormal = Color.FromArgb(37, 37, 40);
-        private static readonly Color BgHover = Color.FromArgb(48, 48, 52);
-        private static readonly Color BgActive = Color.FromArgb(20, 50, 45);
-        private static readonly Color BgDisabled = Color.FromArgb(28, 28, 30);
-        private static readonly Color BorderNormal = Color.FromArgb(60, 60, 66);
-        private static readonly Color BorderHover = Color.FromArgb(80, 80, 88);
-        private static readonly Color BorderDisabled = Color.FromArgb(40, 40, 44);
-        private static readonly Color Accent = Color.FromArgb(0, 200, 160);
-        private static readonly Color TextNormal = Color.FromArgb(170, 170, 175);
-        private static readonly Color TextDisabled = Color.FromArgb(70, 70, 75);
-
         [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
         public bool IsActive
         {
@@ -48,7 +37,11 @@ namespace PredatorControlApp
             Font = new Font("Segoe UI", 9.25f, FontStyle.Regular);
             Size = new Size(96, 40);
             Cursor = Cursors.Hand;
+
+            AppTheme.Changed += OnThemeChanged;
         }
+
+        private void OnThemeChanged(object? sender, EventArgs e) => Invalidate();
 
         private static GraphicsPath RoundedRect(Rectangle bounds, int radius)
         {
@@ -68,40 +61,40 @@ namespace PredatorControlApp
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
-            g.Clear(Parent?.BackColor ?? Color.FromArgb(30, 30, 30));
+            g.Clear(Parent?.BackColor ?? AppTheme.FormBackground);
 
             var rect = new Rectangle(1, 1, Width - 3, Height - 3);
-            using var path = RoundedRect(rect, 8);
+            using var path = RoundedRect(rect, 4);
 
             Color bg, border, textColor;
             float borderWidth;
 
             if (!Enabled)
             {
-                bg = BgDisabled;
-                border = BorderDisabled;
-                textColor = TextDisabled;
+                bg = AppTheme.ButtonDisabled;
+                border = AppTheme.ButtonBorderDisabled;
+                textColor = AppTheme.ButtonTextDisabled;
                 borderWidth = 1f;
             }
             else if (_isActive)
             {
-                bg = BgActive;
-                border = Accent;
-                textColor = _customActiveColor ?? Accent;
-                borderWidth = 1.6f;
+                bg = AppTheme.ButtonActiveBackground;
+                border = AppTheme.Accent;
+                textColor = _customActiveColor ?? AppTheme.Accent;
+                borderWidth = 1.5f;
             }
             else if (_isHover)
             {
-                bg = BgHover;
-                border = BorderHover;
-                textColor = Color.White;
+                bg = AppTheme.ButtonHover;
+                border = AppTheme.ButtonBorderHover;
+                textColor = AppTheme.ButtonTextHover;
                 borderWidth = 1f;
             }
             else
             {
-                bg = BgNormal;
-                border = BorderNormal;
-                textColor = TextNormal;
+                bg = AppTheme.ButtonBackground;
+                border = AppTheme.ButtonBorder;
+                textColor = AppTheme.ButtonText;
                 borderWidth = 1f;
             }
 
@@ -110,12 +103,6 @@ namespace PredatorControlApp
 
             using (var pen = new Pen(border, borderWidth))
                 g.DrawPath(pen, path);
-
-            if (_isActive && Enabled)
-            {
-                using var glowPen = new Pen(Color.FromArgb(35, 0, 200, 160), 3f);
-                g.DrawPath(glowPen, path);
-            }
 
             TextRenderer.DrawText(g, Text, Font, ClientRectangle, textColor,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
@@ -146,6 +133,13 @@ namespace PredatorControlApp
             else { Cursor = Cursors.Hand; }
             Invalidate();
             base.OnEnabledChanged(e);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                AppTheme.Changed -= OnThemeChanged;
+            base.Dispose(disposing);
         }
     }
 }

@@ -1,4 +1,4 @@
-#pragma warning disable WFO1000 
+#pragma warning disable WFO1000
 
 using System.Drawing.Drawing2D;
 using System.ComponentModel;
@@ -10,12 +10,11 @@ namespace PredatorControlApp
         private bool _checked;
         private bool _isHovered;
 
-        
-        private float _knobProgress;          
+        private float _knobProgress;
         private float _targetProgress;
         private readonly System.Windows.Forms.Timer _animTimer;
-        private const int AnimIntervalMs = 12; 
-        private const float AnimSpeed = 0.12f; 
+        private const int AnimIntervalMs = 12;
+        private const float AnimSpeed = 0.12f;
 
         public event EventHandler? CheckedChanged;
 
@@ -47,7 +46,11 @@ namespace PredatorControlApp
 
             _animTimer = new System.Windows.Forms.Timer { Interval = AnimIntervalMs };
             _animTimer.Tick += OnAnimTick;
+
+            AppTheme.Changed += OnThemeChanged;
         }
+
+        private void OnThemeChanged(object? sender, EventArgs e) => Invalidate();
 
         private void OnAnimTick(object? sender, EventArgs e)
         {
@@ -82,9 +85,7 @@ namespace PredatorControlApp
         protected override void OnMouseUp(MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Left && Enabled)
-            {
                 Checked = !Checked;
-            }
             base.OnMouseUp(e);
         }
 
@@ -102,22 +103,17 @@ namespace PredatorControlApp
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
-            float t = _knobProgress; 
+            float t = _knobProgress;
 
-            Color trackOff = Color.FromArgb(45, 45, 50);
-            Color trackOn = Color.FromArgb(0, 80, 65);
-            Color trackDisabled = Color.FromArgb(35, 35, 40);
-
-            Color knobOff = Color.FromArgb(80, 80, 85);
-            Color knobOn = Color.FromArgb(0, 200, 160);
-            Color knobDisabled = Color.FromArgb(55, 55, 60);
-
-            Color trackColor = Enabled ? LerpColor(trackOff, trackOn, t) : trackDisabled;
-            Color knobColor = Enabled ? LerpColor(knobOff, knobOn, t) : knobDisabled;
-
+            Color trackColor = Enabled
+                ? LerpColor(AppTheme.SwitchTrackOff, AppTheme.SwitchTrackOn, t)
+                : AppTheme.SwitchTrackDisabled;
+            Color knobColor = Enabled
+                ? LerpColor(AppTheme.SwitchKnobOff, AppTheme.SwitchKnobOn, t)
+                : AppTheme.SwitchKnobDisabled;
             Color borderColor = Enabled
-                ? (_isHovered ? Color.FromArgb(90, 90, 100) : Color.FromArgb(70, 70, 75))
-                : Color.FromArgb(50, 50, 55);
+                ? (_isHovered ? AppTheme.SwitchBorderHover : AppTheme.SwitchBorder)
+                : AppTheme.SwitchBorder;
 
             using (var path = GetRoundedRectPath(new Rectangle(1, 1, Width - 3, Height - 3), Height / 2))
             {
@@ -134,9 +130,7 @@ namespace PredatorControlApp
             int knobY = 3;
 
             using (var knobBrush = new SolidBrush(knobColor))
-            {
                 g.FillEllipse(knobBrush, knobX, knobY, knobSize, knobSize);
-            }
 
             float cx = knobX + knobSize / 2f;
             float cy = knobY + knobSize / 2f;
@@ -145,16 +139,16 @@ namespace PredatorControlApp
             {
                 int iconAlpha = (int)((t - 0.5f) * 2f * 255f);
                 float r = knobSize * 0.23f;
-                PointF[] shieldPoints = new PointF[]
-                {
+                PointF[] shieldPoints =
+                [
                     new PointF(cx - r, cy - r),
                     new PointF(cx + r, cy - r),
                     new PointF(cx + r, cy - r * 0.1f),
                     new PointF(cx, cy + r * 1.1f),
                     new PointF(cx - r, cy - r * 0.1f),
-                };
+                ];
 
-                using var pen = new Pen(Color.FromArgb(Math.Clamp(iconAlpha, 0, 255), 255, 255, 255), 1.5f);
+                using var pen = new Pen(Color.FromArgb(Math.Clamp(iconAlpha, 0, 255), AppTheme.IsDark ? 32 : 255, AppTheme.IsDark ? 32 : 255, AppTheme.IsDark ? 32 : 255), 1.5f);
                 pen.LineJoin = LineJoin.Round;
                 g.DrawPolygon(pen, shieldPoints);
                 g.DrawLine(pen, cx, cy - r, cx, cy + r * 0.5f);
@@ -164,17 +158,17 @@ namespace PredatorControlApp
                 int iconAlpha = (int)((0.5f - t) * 2f * 255f);
                 float h = knobSize * 0.28f;
                 float w = knobSize * 0.18f;
-                PointF[] boltPoints = new PointF[]
-                {
+                PointF[] boltPoints =
+                [
                     new PointF(cx + w * 0.2f, cy - h),
                     new PointF(cx - w, cy + h * 0.1f),
                     new PointF(cx - w * 0.2f, cy + h * 0.1f),
                     new PointF(cx - w * 0.4f, cy + h),
                     new PointF(cx + w, cy - h * 0.1f),
                     new PointF(cx + w * 0.2f, cy - h * 0.1f)
-                };
+                ];
 
-                using var brush = new SolidBrush(Color.FromArgb(Math.Clamp(iconAlpha, 0, 255), 255, 215, 0));
+                using var brush = new SolidBrush(Color.FromArgb(Math.Clamp(iconAlpha, 0, 255), 255, 185, 0));
                 g.FillPolygon(brush, boltPoints);
             }
         }
@@ -195,6 +189,7 @@ namespace PredatorControlApp
         {
             if (disposing)
             {
+                AppTheme.Changed -= OnThemeChanged;
                 _animTimer.Stop();
                 _animTimer.Dispose();
             }

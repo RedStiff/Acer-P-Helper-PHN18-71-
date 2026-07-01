@@ -4,21 +4,23 @@ using System.Runtime.Versioning;
 namespace PredatorControlApp
 {
     [SupportedOSPlatform("windows")]
-    public class GameSyncForm : Form
+    public class GameSyncForm : ResizableBorderlessForm
     {
-        #region Theme Colors
-
-        private static readonly Color FormBg = Color.FromArgb(22, 22, 26);
-        private static readonly Color PanelBg = Color.FromArgb(30, 30, 34);
-        private static readonly Color BorderColor = Color.FromArgb(50, 50, 55);
-        private static readonly Color HeaderColor = Color.FromArgb(120, 120, 135);
-        private static readonly Color SubHeaderColor = Color.FromArgb(100, 100, 110);
-        private static readonly Color AccentColor = Color.FromArgb(0, 200, 160);
-        private static readonly Color TextColor = Color.FromArgb(210, 210, 215);
+        #region Theme
 
         private static readonly Font FontTitle = new("Segoe UI", 11f, FontStyle.Bold);
         private static readonly Font FontSection = new("Segoe UI", 8.5f, FontStyle.Bold);
         private static readonly Font FontBody = new("Segoe UI", 9.5f, FontStyle.Regular);
+
+        private Panel _pnlTitle = null!;
+        private Panel _pnlBody = null!;
+        private Panel _pnlEmpty = null!;
+        private Label _lblTitleBar = null!, _lblClose = null!;
+        private Label _lblSectionApps = null!;
+        private ResponsiveLayoutHelper? _responsiveLayout;
+
+        private const int DesignClientWidth = 780;
+        private const int DesignClientHeight = 700;
 
         #endregion
 
@@ -36,16 +38,15 @@ namespace PredatorControlApp
         private PredatorSlider _trkBrightness = null!, _trkSpeed = null!;
         private Label _lblBrightVal = null!, _lblSpeedVal = null!;
         private PredatorButton _btnColorPick = null!;
-        private Color _selectedColor = Color.FromArgb(0, 200, 160);
-        private ColorDialog _colorPicker = new() { FullOpen = true };
-        private PredatorButton _btnSave = null!, _btnRemove = null!, _btnAdd = null!;
+        private KeyboardColorSettings _keyboardColorSettings = new();
+        private PredatorButton _btnSave = null!, _btnRemove = null!, _btnAdd = null!, _btnPick = null!;
 
         private GameProfile? _editingProfile;
 
         private static readonly string[] PowerModeNames = { "Quiet", "Balanced", "Performance", "Turbo", "Eco" };
         private static readonly byte[] PowerModeValues = { 0x00, 0x01, 0x04, 0x05, 0x06 };
-        private static readonly string[] FanModeNames = { "Auto", "Max", "Custom" };
-        private static readonly byte[] FanModeValues = { 0x01, 0x02, 0x03 };
+        private static readonly string[] FanModeNames = { "Auto", "Max", "Custom", "Advanced" };
+        private static readonly byte[] FanModeValues = { 0x01, 0x02, 0x03, FanCurveController.FanModeAdvanced };
         private static readonly string[] RgbModeNames = { "Don't Change", "Static", "Breathing", "Neon", "Wave", "Shifting", "Zoom", "Meteor", "Twinkling" };
 
         #endregion
@@ -56,19 +57,40 @@ namespace PredatorControlApp
         {
             _controller = controller;
             _maxHz = maxHz;
+            _keyboardColorSettings.SolidColor = AppTheme.Accent;
+
+            var ui = UiSettings.Load();
 
             this.Text = "Game Sync Configuration";
             this.FormBorderStyle = FormBorderStyle.None;
             this.StartPosition = FormStartPosition.CenterParent;
-            this.BackColor = FormBg;
-            this.ForeColor = TextColor;
-            this.ClientSize = new Size(780, 700);
+            this.BackColor = AppTheme.FormBackground;
+            this.ForeColor = AppTheme.PrimaryText;
+            this.ClientSize = new Size(DesignClientWidth, DesignClientHeight);
             this.DoubleBuffered = true;
             this.ShowInTaskbar = false;
+            BorderlessResizeHelper.ApplyTo(this, UiSettings.MinGameSyncWidth, UiSettings.MinGameSyncHeight);
             try { this.Icon = new Icon("appicon.ico"); } catch { }
 
             BuildUI();
+
+            _pnlBody.PerformLayout();
+            _responsiveLayout = new ResponsiveLayoutHelper(this, new Size(DesignClientWidth, DesignClientHeight));
+            _responsiveLayout.Snapshot(_pnlBody);
+
+            ClientSize = ui.GetGameSyncClientSize();
+            LayoutTitleBar(24);
+
+            ApplyTheme();
+            AppTheme.Changed += OnThemeChanged;
             PopulateList();
+        }
+
+        private void OnThemeChanged(object? sender, EventArgs e) => ApplyTheme();
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            e.Graphics.Clear(BackColor);
         }
 
         #endregion
@@ -94,37 +116,61 @@ namespace PredatorControlApp
         private void BuildUI()
         {
             int pad = 24;
-
-            var pnlTitle = new Panel { Height = 42, Dock = DockStyle.Top, BackColor = Color.FromArgb(18, 18, 21) };
-            pnlTitle.MouseDown += TitleBar_MouseDown;
-            this.Controls.Add(pnlTitle);
-
-            var lblTitle = new Label { Text = "🎮  Game Sync Configuration", Font = FontTitle, ForeColor = TextColor, AutoSize = true, Location = new Point(pad, 11), BackColor = Color.Transparent };
-            lblTitle.MouseDown += TitleBar_MouseDown;
-            pnlTitle.Controls.Add(lblTitle);
-
-            var lblClose = new Label { Text = "●", ForeColor = Color.FromArgb(255, 95, 86), Font = new Font("Arial", 12f), AutoSize = true, Cursor = Cursors.Hand, BackColor = Color.Transparent };
-            lblClose.Location = new Point(this.ClientSize.Width - pad - lblClose.PreferredWidth - 4, 9);
-            lblClose.Click += (s, e) => this.Close();
-            pnlTitle.Controls.Add(lblClose);
-
-            int contentY = pnlTitle.Bottom + pad;
-            int bottomPad = pad;
-
+            int titleH = 42;
+            int bodyH = DesignClientHeight - titleH;
+            int contentY = pad;
             int listW = 220;
-            int listAreaH = this.ClientSize.Height - contentY - bottomPad;
-
-            MakeLabel("CONFIGURED APPS", pad, contentY, FontSection, HeaderColor);
-
+            int listAreaH = bodyH - pad * 2;
             int btnAddH = 34;
-            int listH = listAreaH - 26 - (btnAddH * 3) - 28; 
+            int listH = listAreaH - 24 - 26 - (btnAddH * 3) - 28;
+            int editorX = pad + listW + pad;
+            int editorW = DesignClientWidth - editorX - pad;
+            int editorH = listAreaH;
+
+            _pnlBody = new Panel { Dock = DockStyle.Fill, BackColor = Color.Transparent };
+            Controls.Add(_pnlBody);
+
+            _pnlTitle = new Panel { Height = titleH, Dock = DockStyle.Top, BackColor = AppTheme.TitleBarBackground };
+            _pnlTitle.MouseDown += TitleBar_MouseDown;
+            Controls.Add(_pnlTitle);
+
+            _lblTitleBar = new Label
+            {
+                Text = "Game Sync Configuration",
+                Font = FontTitle,
+                ForeColor = AppTheme.PrimaryText,
+                AutoSize = true,
+                Location = new Point(pad, 11),
+                BackColor = Color.Transparent
+            };
+            _lblTitleBar.MouseDown += TitleBar_MouseDown;
+            _pnlTitle.Controls.Add(_lblTitleBar);
+
+            var captionFont = new Font("Segoe UI", 10f, FontStyle.Regular);
+            _lblClose = new Label
+            {
+                Text = "\u2715",
+                ForeColor = AppTheme.CaptionButton,
+                Font = captionFont,
+                AutoSize = true,
+                Cursor = Cursors.Hand,
+                BackColor = Color.Transparent,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right
+            };
+            _lblClose.Click += (_, _) => Close();
+            _lblClose.MouseEnter += (_, _) => _lblClose.ForeColor = AppTheme.CaptionCloseHover;
+            _lblClose.MouseLeave += (_, _) => _lblClose.ForeColor = AppTheme.CaptionButton;
+            _pnlTitle.Controls.Add(_lblClose);
+            _pnlTitle.Resize += (_, _) => LayoutTitleBar(pad);
+
+            _lblSectionApps = MakeLabelInBody("CONFIGURED APPS", pad, contentY, FontSection, AppTheme.SectionHeader, "section");
 
             _lstProfiles = new ListBox
             {
                 Location = new Point(pad, contentY + 24),
                 Size = new Size(listW, listH),
-                BackColor = PanelBg,
-                ForeColor = TextColor,
+                BackColor = AppTheme.PanelBackground,
+                ForeColor = AppTheme.PrimaryText,
                 Font = FontBody,
                 BorderStyle = BorderStyle.FixedSingle,
                 DrawMode = DrawMode.OwnerDrawFixed,
@@ -132,148 +178,173 @@ namespace PredatorControlApp
             };
             _lstProfiles.DrawItem += LstProfiles_DrawItem;
             _lstProfiles.SelectedIndexChanged += LstProfiles_SelectedIndexChanged;
-            this.Controls.Add(_lstProfiles);
+            _pnlBody.Controls.Add(_lstProfiles);
 
-            _btnAdd = MakeButton("\uff0b  Browse for .exe", pad, _lstProfiles.Bottom + 8, listW, btnAddH);
+            _btnAdd = MakeButtonInBody("\uff0b  Browse for .exe", pad, _lstProfiles.Bottom + 8, listW, btnAddH);
             _btnAdd.Click += BtnAdd_Click;
 
-            var btnPick = MakeButton("⚡  Pick Running Process", pad, _lstProfiles.Bottom + 8 + btnAddH + 6, listW, btnAddH);
-            btnPick.Click += BtnPickRunning_Click;
+            _btnPick = MakeButtonInBody("⚡  Pick Running Process", pad, _lstProfiles.Bottom + 8 + btnAddH + 6, listW, btnAddH);
+            _btnPick.Click += BtnPickRunning_Click;
 
-            int editorX = pad + listW + pad;
-            int editorW = this.ClientSize.Width - editorX - pad;
-            int editorH = listAreaH;
+            _pnlEmpty = new Panel
+            {
+                Location = new Point(editorX, contentY),
+                Size = new Size(editorW, editorH),
+                BackColor = Color.Transparent
+            };
+            _pnlEmpty.Controls.Add(new Label
+            {
+                Text = "Select an application from the list\nor add a new one to get started.",
+                ForeColor = AppTheme.SecondaryText,
+                Font = FontBody,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Dock = DockStyle.Fill,
+                BackColor = Color.Transparent
+            });
+            _pnlBody.Controls.Add(_pnlEmpty);
 
             _pnlEditor = new Panel
             {
                 Location = new Point(editorX, contentY),
                 Size = new Size(editorW, editorH),
-                BackColor = FormBg,
+                BackColor = AppTheme.FormBackground,
                 Visible = false
             };
-            this.Controls.Add(_pnlEditor);
-
-            var lblEmpty = new Label
-            {
-                Text = "Select an application from the list\nor add a new one to get started.",
-                ForeColor = SubHeaderColor,
-                Font = FontBody,
-                TextAlign = ContentAlignment.MiddleCenter,
-                Dock = DockStyle.Fill,
-                BackColor = Color.Transparent,
-                Name = "lblEmpty"
-            };
+            _pnlBody.Controls.Add(_pnlEditor);
 
             int ey = 0;
-            int sectionGap = 50; 
+            int sectionGap = 50;
 
-            _lblExeName = new Label { Text = "", Font = FontTitle, ForeColor = AccentColor, AutoSize = true, Location = new Point(0, ey), MaximumSize = new Size(editorW, 0), BackColor = Color.Transparent };
+            _lblExeName = new Label
+            {
+                Text = "",
+                Font = FontTitle,
+                ForeColor = AppTheme.Accent,
+                AutoSize = true,
+                Location = new Point(0, ey),
+                MaximumSize = new Size(editorW, 0),
+                BackColor = Color.Transparent
+            };
             _pnlEditor.Controls.Add(_lblExeName);
             ey += 34;
 
-            _pnlEditor.Controls.Add(new Panel { Location = new Point(0, ey), Size = new Size(editorW, 1), BackColor = BorderColor });
+            _pnlEditor.Controls.Add(new Panel
+            {
+                Location = new Point(0, ey),
+                Size = new Size(editorW, 1),
+                BackColor = AppTheme.Separator,
+                Tag = "separator"
+            });
             ey += 20;
 
-            MakeLabelIn(_pnlEditor, "POWER MODE", 0, ey, FontSection, HeaderColor);
+            MakeLabelIn(_pnlEditor, "POWER MODE", 0, ey, FontSection, AppTheme.SectionHeader, "section");
             ey += 24;
             _cboPower = MakeComboIn(_pnlEditor, PowerModeNames, 0, ey, editorW);
             ey += sectionGap;
 
-            MakeLabelIn(_pnlEditor, "FAN MODE", 0, ey, FontSection, HeaderColor);
+            MakeLabelIn(_pnlEditor, "FAN MODE", 0, ey, FontSection, AppTheme.SectionHeader, "section");
             ey += 24;
             _cboFan = MakeComboIn(_pnlEditor, FanModeNames, 0, ey, editorW);
             ey += sectionGap;
 
-            MakeLabelIn(_pnlEditor, "REFRESH RATE", 0, ey, FontSection, HeaderColor);
+            MakeLabelIn(_pnlEditor, "REFRESH RATE", 0, ey, FontSection, AppTheme.SectionHeader, "section");
             ey += 24;
             _cboRefresh = MakeComboIn(_pnlEditor, new[] { "Don't Change", "60 Hz", $"{_maxHz} Hz (Max)" }, 0, ey, editorW);
             ey += sectionGap;
 
-            MakeLabelIn(_pnlEditor, "BATTERY CHARGE LIMIT", 0, ey, FontSection, HeaderColor);
+            MakeLabelIn(_pnlEditor, "BATTERY CHARGE LIMIT", 0, ey, FontSection, AppTheme.SectionHeader, "section");
             ey += 24;
             _cboBattery = MakeComboIn(_pnlEditor, new[] { "Don't Change", "Full Charge (100%)", "Limit to 80% (Health)" }, 0, ey, editorW);
             ey += sectionGap;
 
-            MakeLabelIn(_pnlEditor, "RGB KEYBOARD", 0, ey, FontSection, HeaderColor);
+            MakeLabelIn(_pnlEditor, "RGB KEYBOARD", 0, ey, FontSection, AppTheme.SectionHeader, "section");
             ey += 24;
             _cboRgbMode = MakeComboIn(_pnlEditor, RgbModeNames, 0, ey, editorW);
             ey += sectionGap;
 
             int halfW = (editorW - 20) / 2;
 
-            MakeLabelIn(_pnlEditor, "BRIGHTNESS", 0, ey, FontSection, HeaderColor);
-            _lblBrightVal = MakeLabelIn(_pnlEditor, "100%", halfW - 40, ey, FontBody, SubHeaderColor);
-            MakeLabelIn(_pnlEditor, "EFFECT SPEED", halfW + 20, ey, FontSection, HeaderColor);
-            _lblSpeedVal = MakeLabelIn(_pnlEditor, "50%", editorW - 40, ey, FontBody, SubHeaderColor);
+            MakeLabelIn(_pnlEditor, "BRIGHTNESS", 0, ey, FontSection, AppTheme.SectionHeader, "section");
+            _lblBrightVal = MakeLabelIn(_pnlEditor, "100%", halfW - 40, ey, FontBody, AppTheme.SecondaryText, "sub");
+            MakeLabelIn(_pnlEditor, "EFFECT SPEED", halfW + 20, ey, FontSection, AppTheme.SectionHeader, "section");
+            _lblSpeedVal = MakeLabelIn(_pnlEditor, "50%", editorW - 40, ey, FontBody, AppTheme.SecondaryText, "sub");
             ey += 24;
 
             _trkBrightness = MakeSliderIn(_pnlEditor, 0, ey, halfW, 0, 100, 100);
-            _trkBrightness.ValueChanged += (s, e) => _lblBrightVal.Text = $"{_trkBrightness.Value}%";
+            _trkBrightness.ValueChanged += (_, _) => _lblBrightVal.Text = $"{_trkBrightness.Value}%";
             _trkSpeed = MakeSliderIn(_pnlEditor, halfW + 20, ey, halfW, 1, 100, 50);
-            _trkSpeed.ValueChanged += (s, e) => _lblSpeedVal.Text = $"{_trkSpeed.Value}%";
+            _trkSpeed.ValueChanged += (_, _) => _lblSpeedVal.Text = $"{_trkSpeed.Value}%";
             ey += sectionGap;
 
-            MakeLabelIn(_pnlEditor, "COLOR CUSTOMIZATION", 0, ey, FontSection, HeaderColor);
+            MakeLabelIn(_pnlEditor, "COLOR CUSTOMIZATION", 0, ey, FontSection, AppTheme.SectionHeader, "section");
             ey += 24;
 
-            _btnColorPick = new PredatorButton { Text = "    Choose Custom Color", Location = new Point(0, ey), Size = new Size(editorW, 36) };
-            _btnColorPick.Paint += (s, pe) =>
+            _btnColorPick = new PredatorButton { Text = "    Customize Keyboard Color", Location = new Point(0, ey), Size = new Size(editorW, 36) };
+            _btnColorPick.Paint += (_, pe) =>
             {
                 var g = pe.Graphics;
-                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
                 int cy = _btnColorPick.Height / 2;
                 int cx = _btnColorPick.Width / 2 - 70;
-                using var brush = new SolidBrush(_selectedColor);
+                var previewColor = _keyboardColorSettings.FourZone
+                    ? _keyboardColorSettings.ZoneColors[0]
+                    : _keyboardColorSettings.SolidColor;
+                using var brush = new SolidBrush(previewColor);
                 g.FillEllipse(brush, cx - 6, cy - 6, 12, 12);
-                using var glowBrush = new SolidBrush(Color.FromArgb(100, _selectedColor));
+                using var glowBrush = new SolidBrush(Color.FromArgb(100, previewColor));
                 g.FillEllipse(glowBrush, cx - 8, cy - 8, 16, 16);
             };
-            _btnColorPick.Click += (s, ev) =>
-            {
-                _colorPicker.Color = _selectedColor;
-                if (_colorPicker.ShowDialog(this) == DialogResult.OK)
-                {
-                    _selectedColor = _colorPicker.Color;
-                    _btnColorPick.Invalidate();
-                }
-            };
+            _btnColorPick.Click += (_, _) => OpenKeyboardColorEditor();
             _pnlEditor.Controls.Add(_btnColorPick);
 
             ey += sectionGap;
 
             int btnW = (editorW - 16) / 2;
             _btnSave = new PredatorButton { Text = "💾  Save Profile", Location = new Point(0, ey), Size = new Size(btnW, 38) };
-            _pnlEditor.Controls.Add(_btnSave);
             _btnSave.Click += BtnSave_Click;
+            _pnlEditor.Controls.Add(_btnSave);
 
             _btnRemove = new PredatorButton { Text = "🗑  Remove", Location = new Point(btnW + 12, ey), Size = new Size(btnW, 38) };
-            _pnlEditor.Controls.Add(_btnRemove);
             _btnRemove.Click += BtnRemove_Click;
+            _pnlEditor.Controls.Add(_btnRemove);
+
+            Paint += (_, e) =>
+            {
+                using var pen = new Pen(AppTheme.Separator);
+                e.Graphics.DrawRectangle(pen, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
+                e.Graphics.DrawLine(pen, 0, _pnlTitle.Bottom - 1, ClientSize.Width, _pnlTitle.Bottom - 1);
+            };
+        }
+
+        private void LayoutTitleBar(int pad)
+        {
+            if (_lblClose == null || _pnlTitle == null) return;
+            _lblClose.Location = new Point(_pnlTitle.Width - pad - _lblClose.Width - 4, 9);
         }
 
         #endregion
 
         #region UI Helpers
 
-        private Label MakeLabel(string text, int x, int y, Font font, Color color)
+        private Label MakeLabelInBody(string text, int x, int y, Font font, Color color, string? tag = null)
         {
-            var lbl = new Label { Text = text, Location = new Point(x, y), AutoSize = true, Font = font, ForeColor = color, BackColor = Color.Transparent };
-            this.Controls.Add(lbl);
+            var lbl = new Label { Text = text, Location = new Point(x, y), AutoSize = true, Font = font, ForeColor = color, BackColor = Color.Transparent, Tag = tag };
+            _pnlBody.Controls.Add(lbl);
             return lbl;
         }
 
-        private Label MakeLabelIn(Panel parent, string text, int x, int y, Font font, Color color)
-        {
-            var lbl = new Label { Text = text, Location = new Point(x, y), AutoSize = true, Font = font, ForeColor = color, BackColor = Color.Transparent };
-            parent.Controls.Add(lbl);
-            return lbl;
-        }
-
-        private PredatorButton MakeButton(string text, int x, int y, int w, int h)
+        private PredatorButton MakeButtonInBody(string text, int x, int y, int w, int h)
         {
             var btn = new PredatorButton { Text = text, Location = new Point(x, y), Size = new Size(w, h) };
-            this.Controls.Add(btn);
+            _pnlBody.Controls.Add(btn);
             return btn;
+        }
+
+        private Label MakeLabelIn(Panel parent, string text, int x, int y, Font font, Color color, string? tag = null)
+        {
+            var lbl = new Label { Text = text, Location = new Point(x, y), AutoSize = true, Font = font, ForeColor = color, BackColor = Color.Transparent, Tag = tag };
+            parent.Controls.Add(lbl);
+            return lbl;
         }
 
         private PredatorDropDown MakeComboIn(Panel parent, string[] items, int x, int y, int w)
@@ -303,6 +374,48 @@ namespace PredatorControlApp
             return slider;
         }
 
+        private void ApplyTheme()
+        {
+            this.BackColor = AppTheme.FormBackground;
+            this.ForeColor = AppTheme.PrimaryText;
+            _pnlTitle.BackColor = AppTheme.TitleBarBackground;
+            _lblTitleBar.ForeColor = AppTheme.PrimaryText;
+            _lblClose.ForeColor = AppTheme.CaptionButton;
+            _lstProfiles.BackColor = AppTheme.PanelBackground;
+            _lstProfiles.ForeColor = AppTheme.PrimaryText;
+            _pnlEditor.BackColor = AppTheme.FormBackground;
+            _lblExeName.ForeColor = AppTheme.Accent;
+            ApplyThemeToControl(this);
+            _lstProfiles.Invalidate();
+            Invalidate(true);
+        }
+
+        private static void ApplyThemeToControl(Control control)
+        {
+            switch (control.Tag as string)
+            {
+                case "section":
+                    control.ForeColor = AppTheme.SectionHeader;
+                    break;
+                case "sub":
+                    control.ForeColor = AppTheme.SecondaryText;
+                    break;
+                case "separator":
+                    control.BackColor = AppTheme.Separator;
+                    break;
+            }
+
+            foreach (Control child in control.Controls)
+                ApplyThemeToControl(child);
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            UiSettings.SaveGameSyncWindowSize(ClientSize);
+            AppTheme.Changed -= OnThemeChanged;
+            base.OnFormClosed(e);
+        }
+
 
 
         #endregion
@@ -315,18 +428,18 @@ namespace PredatorControlApp
             e.DrawBackground();
 
             bool selected = (e.State & DrawItemState.Selected) != 0;
-            using var bgBrush = new SolidBrush(selected ? Color.FromArgb(20, 50, 45) : PanelBg);
+            using var bgBrush = new SolidBrush(selected ? AppTheme.ListSelectionBackground : AppTheme.PanelBackground);
             e.Graphics.FillRectangle(bgBrush, e.Bounds);
 
             string text = _lstProfiles.Items[e.Index]?.ToString() ?? "";
-            using var textBrush = new SolidBrush(selected ? AccentColor : TextColor);
+            using var textBrush = new SolidBrush(selected ? AppTheme.Accent : AppTheme.PrimaryText);
             var textRect = new Rectangle(e.Bounds.X + 10, e.Bounds.Y, e.Bounds.Width - 10, e.Bounds.Height);
             var sf = new StringFormat { LineAlignment = StringAlignment.Center };
             e.Graphics.DrawString(text, FontBody, textBrush, textRect, sf);
 
             if (selected)
             {
-                using var accentPen = new Pen(AccentColor, 2f);
+                using var accentPen = new Pen(AppTheme.Accent, 2f);
                 e.Graphics.DrawLine(accentPen, e.Bounds.X, e.Bounds.Y, e.Bounds.X, e.Bounds.Bottom);
             }
         }
@@ -350,10 +463,12 @@ namespace PredatorControlApp
             if (idx < 0 || idx >= _controller.Profiles.Count)
             {
                 _pnlEditor.Visible = false;
+                _pnlEmpty.Visible = true;
                 _editingProfile = null;
                 return;
             }
 
+            _pnlEmpty.Visible = false;
             _editingProfile = _controller.Profiles[idx];
             LoadProfileToEditor(_editingProfile);
             _pnlEditor.Visible = true;
@@ -362,6 +477,7 @@ namespace PredatorControlApp
         private void LoadProfileToEditor(GameProfile p)
         {
             _lblExeName.Text = p.ExecutableName;
+            _lblExeName.MaximumSize = new Size(Math.Max(120, _pnlEditor.Width), 0);
 
             int powerIdx = Array.IndexOf(PowerModeValues, p.PowerMode);
             _cboPower.SelectedIndex = powerIdx >= 0 ? powerIdx : 1;
@@ -386,7 +502,34 @@ namespace PredatorControlApp
             int r = p.RgbR >= 0 ? Math.Clamp(p.RgbR, 0, 255) : 0;
             int g = p.RgbG >= 0 ? Math.Clamp(p.RgbG, 0, 255) : 200;
             int b = p.RgbB >= 0 ? Math.Clamp(p.RgbB, 0, 255) : 160;
-            _selectedColor = Color.FromArgb(r, g, b);
+            _keyboardColorSettings.SolidColor = Color.FromArgb(r, g, b);
+            _keyboardColorSettings.FourZone = p.RgbFourZone == 1;
+            for (int i = 0; i < 4; i++)
+            {
+                int zr = p.RgbZoneR[i] >= 0 ? p.RgbZoneR[i] : r;
+                int zg = p.RgbZoneG[i] >= 0 ? p.RgbZoneG[i] : g;
+                int zb = p.RgbZoneB[i] >= 0 ? p.RgbZoneB[i] : b;
+                _keyboardColorSettings.ZoneColors[i] = Color.FromArgb(zr, zg, zb);
+            }
+            _btnColorPick.Invalidate();
+        }
+
+        private void OpenKeyboardColorEditor()
+        {
+            var settings = new KeyboardColorSettings
+            {
+                FourZone = _keyboardColorSettings.FourZone,
+                SolidColor = _keyboardColorSettings.SolidColor,
+                Brightness = (byte)Math.Clamp(_trkBrightness.Value, 1, 100)
+            };
+            for (int i = 0; i < 4; i++)
+                settings.ZoneColors[i] = _keyboardColorSettings.ZoneColors[i];
+
+            if (!KeyboardColorForm.TryShow(this, settings, out var result)) return;
+
+            _keyboardColorSettings = result;
+            _trkBrightness.Value = result.Brightness;
+            _lblBrightVal.Text = $"{result.Brightness}%";
             _btnColorPick.Invalidate();
         }
 
@@ -417,9 +560,16 @@ namespace PredatorControlApp
             p.RgbMode = _cboRgbMode.SelectedIndex == 0 ? -1 : _cboRgbMode.SelectedIndex - 1;
             p.RgbBrightness = _trkBrightness.Value;
             p.RgbSpeed = _trkSpeed.Value;
-            p.RgbR = _selectedColor.R;
-            p.RgbG = _selectedColor.G;
-            p.RgbB = _selectedColor.B;
+            p.RgbR = _keyboardColorSettings.SolidColor.R;
+            p.RgbG = _keyboardColorSettings.SolidColor.G;
+            p.RgbB = _keyboardColorSettings.SolidColor.B;
+            p.RgbFourZone = _keyboardColorSettings.FourZone ? 1 : 0;
+            for (int i = 0; i < 4; i++)
+            {
+                p.RgbZoneR[i] = _keyboardColorSettings.ZoneColors[i].R;
+                p.RgbZoneG[i] = _keyboardColorSettings.ZoneColors[i].G;
+                p.RgbZoneB[i] = _keyboardColorSettings.ZoneColors[i].B;
+            }
 
             return p;
         }
@@ -497,12 +647,11 @@ namespace PredatorControlApp
                 return;
             }
 
-            var dlgBg    = Color.FromArgb(22, 22, 26);
-            var dlgTitle = Color.FromArgb(18, 18, 21);
-            var dlgBorder= Color.FromArgb(55, 55, 62);
-            var dlgText  = Color.FromArgb(210, 210, 215);
-            var dlgSub   = Color.FromArgb(140, 140, 150);
-            var titleFont= new Font("Segoe UI", 10f, FontStyle.Bold);
+            var dlgBg = AppTheme.FormBackground;
+            var dlgTitle = AppTheme.TitleBarBackground;
+            var dlgBorder = AppTheme.DialogBorder;
+            var dlgText = AppTheme.PrimaryText;
+            var titleFont = new Font("Segoe UI", 10f, FontStyle.Bold);
             var bodyFont = new Font("Segoe UI", 9.25f);
 
             using var dlg = new Form
@@ -531,15 +680,17 @@ namespace PredatorControlApp
             lblTitle.MouseDown += (s, ev) => { if (ev.Button == MouseButtons.Left) { dragging = true; dragStart = ev.Location; } };
             pnlTitle.Controls.Add(lblTitle);
 
-            var lblClose = new Label
+            var lblCloseDlg = new Label
             {
-                Text = "●", ForeColor = Color.FromArgb(255, 95, 86),
-                Font = new Font("Arial", 11f), AutoSize = true,
+                Text = "\u2715", ForeColor = AppTheme.CaptionButton,
+                Font = new Font("Segoe UI", 10f), AutoSize = true,
                 Cursor = Cursors.Hand, BackColor = Color.Transparent,
                 Location = new Point(dlg.ClientSize.Width - 24, 10)
             };
-            lblClose.Click += (s, ev) => dlg.Close();
-            pnlTitle.Controls.Add(lblClose);
+            lblCloseDlg.Click += (s, ev) => dlg.Close();
+            lblCloseDlg.MouseEnter += (s, ev) => lblCloseDlg.ForeColor = AppTheme.CaptionCloseHover;
+            lblCloseDlg.MouseLeave += (s, ev) => lblCloseDlg.ForeColor = AppTheme.CaptionButton;
+            pnlTitle.Controls.Add(lblCloseDlg);
 
             dlg.Paint += (s, pe) =>
             {
@@ -550,14 +701,14 @@ namespace PredatorControlApp
             var pnlSearch = new Panel
             {
                 Location = new Point(14, 50), Size = new Size(332, 30),
-                BackColor = dlgBorder
+                BackColor = AppTheme.InputBorder
             };
             dlg.Controls.Add(pnlSearch);
 
             var txtSearch = new TextBox
             {
                 Location = new Point(1, 1), Size = new Size(330, 28),
-                BackColor = Color.FromArgb(28, 28, 32), ForeColor = dlgText,
+                BackColor = AppTheme.InputBackground, ForeColor = dlgText,
                 Font = bodyFont, BorderStyle = BorderStyle.None,
                 PlaceholderText = "Search..."
             };
@@ -566,7 +717,7 @@ namespace PredatorControlApp
             var lstProcs = new ListBox
             {
                 Location = new Point(14, 90), Size = new Size(332, 340),
-                BackColor = Color.FromArgb(28, 28, 32), ForeColor = dlgText,
+                BackColor = AppTheme.PanelBackground, ForeColor = dlgText,
                 Font = bodyFont, BorderStyle = BorderStyle.None,
                 SelectionMode = SelectionMode.One
             };
@@ -690,6 +841,7 @@ namespace PredatorControlApp
                 _controller.RemoveProfile(_editingProfile.ExecutableName);
                 _editingProfile = null;
                 _pnlEditor.Visible = false;
+                _pnlEmpty.Visible = true;
                 PopulateList();
             }
         }

@@ -6,6 +6,8 @@ namespace PredatorControlApp
         static void Main()
         {
             ApplicationConfiguration.Initialize();
+            Application.SetColorMode(SystemColorMode.System);
+            AppTheme.Initialize();
 
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
             Application.ThreadException += (s, e) =>

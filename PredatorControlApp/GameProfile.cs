@@ -18,6 +18,10 @@ namespace PredatorControlApp
         public int RgbR { get; set; } = -1;               
         public int RgbG { get; set; } = -1;
         public int RgbB { get; set; } = -1;
+        public int RgbFourZone { get; set; } = -1;
+        public int[] RgbZoneR { get; set; } = [-1, -1, -1, -1];
+        public int[] RgbZoneG { get; set; } = [-1, -1, -1, -1];
+        public int[] RgbZoneB { get; set; } = [-1, -1, -1, -1];
     }
 
     public class DashboardSnapshot

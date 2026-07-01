@@ -10,21 +10,12 @@ namespace PredatorControlApp
     {
         private bool _isHover;
         private bool _isOpen;
-        private bool _isClosingPopup; 
+        private bool _isClosingPopup;
         private int _selectedIndex = -1;
         private readonly List<string> _items = new();
         private Form? _popup;
         private ListBox? _listBox;
         private int _hoverIndex = -1;
-
-        private static readonly Color BgNormal = Color.FromArgb(37, 37, 40);
-        private static readonly Color BgHover = Color.FromArgb(48, 48, 52);
-        private static readonly Color BorderNormal = Color.FromArgb(60, 60, 66);
-        private static readonly Color BorderHover = Color.FromArgb(80, 80, 88);
-        private static readonly Color Accent = Color.FromArgb(0, 200, 160);
-        private static readonly Color TextNormal = Color.FromArgb(170, 170, 175);
-        private static readonly Color DropBg = Color.FromArgb(28, 28, 30);
-        private static readonly Color DropHover = Color.FromArgb(48, 48, 52);
 
         [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
         public int SelectedIndex
@@ -60,6 +51,21 @@ namespace PredatorControlApp
             Font = new Font("Segoe UI", 9.25f, FontStyle.Regular);
             Size = new Size(180, 34);
             Cursor = Cursors.Hand;
+
+            AppTheme.Changed += OnThemeChanged;
+        }
+
+        private void OnThemeChanged(object? sender, EventArgs e)
+        {
+            if (_listBox != null)
+            {
+                _listBox.BackColor = AppTheme.DropDownPopupBackground;
+                _listBox.ForeColor = AppTheme.ButtonText;
+                _listBox.Invalidate();
+            }
+            if (_popup != null)
+                _popup.BackColor = AppTheme.DropDownPopupBackground;
+            Invalidate();
         }
 
         private static GraphicsPath RoundedRect(Rectangle bounds, int radius)
@@ -79,13 +85,13 @@ namespace PredatorControlApp
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-            g.Clear(Parent?.BackColor ?? Color.FromArgb(30, 30, 30));
+            g.Clear(Parent?.BackColor ?? AppTheme.FormBackground);
 
             var rect = new Rectangle(1, 1, Width - 3, Height - 3);
-            using var path = RoundedRect(rect, 6);
+            using var path = RoundedRect(rect, 4);
 
-            Color bg = _isHover || _isOpen ? BgHover : BgNormal;
-            Color border = _isHover || _isOpen ? BorderHover : BorderNormal;
+            Color bg = _isHover || _isOpen ? AppTheme.DropDownHover : AppTheme.DropDownBackground;
+            Color border = _isHover || _isOpen ? AppTheme.ButtonBorderHover : AppTheme.ButtonBorder;
 
             using (var bgBrush = new SolidBrush(bg))
                 g.FillPath(bgBrush, path);
@@ -96,12 +102,12 @@ namespace PredatorControlApp
             string displayText = SelectedText;
             if (string.IsNullOrEmpty(displayText)) displayText = "Select...";
             var textRect = new Rectangle(12, 0, Width - 36, Height);
-            TextRenderer.DrawText(g, displayText, Font, textRect, TextNormal,
+            TextRenderer.DrawText(g, displayText, Font, textRect, AppTheme.ButtonText,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
 
             int arrowX = Width - 22;
             int arrowY = Height / 2 - 2;
-            using var arrowPen = new Pen(Color.FromArgb(140, 140, 160), 1.5f);
+            using var arrowPen = new Pen(AppTheme.SecondaryText, 1.5f);
             arrowPen.StartCap = LineCap.Round;
             arrowPen.EndCap = LineCap.Round;
             g.DrawLine(arrowPen, arrowX, arrowY, arrowX + 5, arrowY + 4);
@@ -145,8 +151,8 @@ namespace PredatorControlApp
             {
                 DrawMode = DrawMode.OwnerDrawFixed,
                 ItemHeight = itemHeight,
-                BackColor = DropBg,
-                ForeColor = TextNormal,
+                BackColor = AppTheme.DropDownPopupBackground,
+                ForeColor = AppTheme.ButtonText,
                 BorderStyle = BorderStyle.None,
                 IntegralHeight = false,
                 Font = this.Font,
@@ -181,7 +187,7 @@ namespace PredatorControlApp
                 Size = new Size(this.Width, popupHeight),
                 FormBorderStyle = FormBorderStyle.None,
                 ShowInTaskbar = false,
-                BackColor = DropBg,
+                BackColor = AppTheme.DropDownPopupBackground,
                 TopMost = true
             };
 
@@ -242,8 +248,8 @@ namespace PredatorControlApp
             bool isHovered = e.Index == _hoverIndex;
             bool isSelected = e.Index == _selectedIndex;
 
-            Color bg = isHovered ? DropHover : DropBg;
-            Color textCol = isSelected ? Accent : TextNormal;
+            Color bg = isHovered ? AppTheme.DropDownHover : AppTheme.DropDownPopupBackground;
+            Color textCol = isSelected ? AppTheme.Accent : AppTheme.ButtonText;
 
             using (var bgBrush = new SolidBrush(bg))
                 g.FillRectangle(bgBrush, e.Bounds);
@@ -257,7 +263,7 @@ namespace PredatorControlApp
             {
                 int checkX = e.Bounds.Right - 24;
                 int checkY = e.Bounds.Y + e.Bounds.Height / 2;
-                using var checkPen = new Pen(Accent, 1.8f);
+                using var checkPen = new Pen(AppTheme.Accent, 1.8f);
                 checkPen.StartCap = LineCap.Round;
                 checkPen.EndCap = LineCap.Round;
                 g.DrawLine(checkPen, checkX, checkY, checkX + 4, checkY + 4);
@@ -267,7 +273,11 @@ namespace PredatorControlApp
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) ClosePopup();
+            if (disposing)
+            {
+                AppTheme.Changed -= OnThemeChanged;
+                ClosePopup();
+            }
             base.Dispose(disposing);
         }
     }

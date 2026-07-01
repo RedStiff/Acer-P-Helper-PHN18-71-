@@ -8,6 +8,7 @@ namespace PredatorControlApp
         {
             if (disposing)
             {
+                _clockReader?.Dispose();
                 _wmi?.Dispose();
                 _trayIcon?.Dispose();
                 _timer?.Dispose();

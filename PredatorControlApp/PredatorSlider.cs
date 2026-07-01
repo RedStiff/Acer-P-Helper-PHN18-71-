@@ -12,11 +12,6 @@ namespace PredatorControlApp
         private int _maximum = 100;
         private bool _isDragging;
 
-        private static readonly Color TrackBg = Color.FromArgb(55, 55, 62);
-        private static readonly Color FillColor = Color.FromArgb(0, 200, 160);
-        private static readonly Color ThumbColor = Color.FromArgb(0, 200, 160);
-        private static readonly Color GlowColor = Color.FromArgb(50, 0, 200, 160);
-
         private const int TrackHeight = 4;
         private const int ThumbRadius = 7;
 
@@ -59,7 +54,11 @@ namespace PredatorControlApp
 
             Size = new Size(300, 28);
             Cursor = Cursors.Hand;
+
+            AppTheme.Changed += OnThemeChanged;
         }
+
+        private void OnThemeChanged(object? sender, EventArgs e) => Invalidate();
 
         private int TrackLeft => ThumbRadius;
         private int TrackRight => Width - ThumbRadius;
@@ -71,34 +70,31 @@ namespace PredatorControlApp
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Parent?.BackColor ?? Color.FromArgb(30, 30, 30));
+            g.Clear(Parent?.BackColor ?? AppTheme.FormBackground);
 
             int cy = Height / 2;
             int trackY = cy - TrackHeight / 2;
             int fillWidth = ThumbX - TrackLeft;
 
-            using (var brush = new SolidBrush(TrackBg))
+            using (var brush = new SolidBrush(AppTheme.SliderTrack))
                 g.FillRectangle(brush, TrackLeft, trackY, TrackWidth, TrackHeight);
 
             if (fillWidth > 0)
             {
-                using var brush = new SolidBrush(FillColor);
+                using var brush = new SolidBrush(AppTheme.SliderFill);
                 g.FillRectangle(brush, TrackLeft, trackY, fillWidth, TrackHeight);
             }
 
-            using (var glowBrush = new SolidBrush(GlowColor))
-            {
-                int glowR = ThumbRadius + 3;
-                g.FillEllipse(glowBrush, ThumbX - glowR, cy - glowR, glowR * 2, glowR * 2);
-            }
-
-            using (var thumbBrush = new SolidBrush(ThumbColor))
+            using (var thumbBrush = new SolidBrush(AppTheme.SliderThumb))
                 g.FillEllipse(thumbBrush, ThumbX - ThumbRadius, cy - ThumbRadius, ThumbRadius * 2, ThumbRadius * 2);
 
             int innerR = ThumbRadius - 3;
             if (innerR > 0)
             {
-                using var innerBrush = new SolidBrush(Color.FromArgb(80, 255, 255, 255));
+                Color innerColor = AppTheme.IsDark
+                    ? Color.FromArgb(80, 255, 255, 255)
+                    : Color.FromArgb(120, 255, 255, 255);
+                using var innerBrush = new SolidBrush(innerColor);
                 g.FillEllipse(innerBrush, ThumbX - innerR, cy - innerR, innerR * 2, innerR * 2);
             }
         }
@@ -162,6 +158,13 @@ namespace PredatorControlApp
                 e.Handled = true;
             }
             base.OnKeyDown(e);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                AppTheme.Changed -= OnThemeChanged;
+            base.Dispose(disposing);
         }
     }
 }

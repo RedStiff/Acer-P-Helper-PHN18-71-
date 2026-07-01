@@ -15,6 +15,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="tools\**\*" />
+    <EmbeddedResource Remove="tools\**\*" />
+    <None Remove="tools\**\*" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="appicon.ico" />
   </ItemGroup>
 

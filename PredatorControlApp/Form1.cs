@@ -5,7 +5,7 @@ using Microsoft.Win32;
 namespace PredatorControlApp
 {
     [SupportedOSPlatform("windows")]
-    public partial class Form1 : Form
+    public partial class Form1 : ResizableBorderlessForm
     {
         #region Win32 Interop — Single Instance
 
@@ -74,24 +74,22 @@ namespace PredatorControlApp
         #region Fields
 
         private WmiController _wmi = new();
+        private HardwareClockReader _clockReader = new();
         private System.Windows.Forms.Timer _timer = new();
         private NotifyIcon _trayIcon = new();
         private ContextMenuStrip _trayMenu = new();
-        private ColorDialog _colorPicker = new() { FullOpen = true };
+        private KeyboardColorSettings _keyboardColorSettings = new();
 
         private int _cpuTemp, _gpuTemp;
+        private int _cpuFanRpm, _gpuFanRpm;
+        private int? _lastTrayCpuMhz, _lastTrayGpuMhz;
 
         private bool? _isPluggedIn = SystemInformation.PowerStatus.PowerLineStatus == PowerLineStatus.Online;
         private bool _isClosing;
         private int _maxHz;
         private float _dpiScale = 1f; 
-        private int _formW;           
-
-        private static readonly Color FormBg = Color.FromArgb(22, 22, 26);
-        private static readonly Color SeparatorColor = Color.FromArgb(40, 40, 44);
-        private static readonly Color HeaderColor = Color.FromArgb(120, 120, 135);
-        private static readonly Color SubHeaderColor = Color.FromArgb(100, 100, 110);
-        private static readonly Color AccentColor = Color.FromArgb(0, 200, 160);
+        private int _formW;
+        private ResponsiveLayoutHelper? _responsiveLayout;
 
         private static readonly Font FontTitle = new("Segoe UI", 9.5f, FontStyle.Bold);
         private static readonly Font FontSectionHeader = new("Segoe UI", 8.5f, FontStyle.Bold);
@@ -99,14 +97,28 @@ namespace PredatorControlApp
         private static readonly Font FontBody = new("Segoe UI", 9.5f, FontStyle.Regular);
         private static readonly Font FontBodyBold = new("Segoe UI", 9.5f, FontStyle.Bold);
 
+        private Panel _pnlTitle = null!;
+        private Panel _pnlBody = null!;
         private Label _lblTitle = null!, _lblCpuTemp = null!, _lblGpuTemp = null!;
+        private Label _lblCpuClock = null!, _lblGpuClock = null!;
+        private Label _lblCpuFanRpm = null!, _lblGpuFanRpm = null!;
+        private Label _lblMinimize = null!, _lblClose = null!;
         private Label _lblPowerStatus = null!, _lblFanStatus = null!;
         private Label _lblBrightHdr = null!, _lblSpeedHdr = null!;
 
         private PredatorButton _btnQuiet = null!, _btnBalanced = null!, _btnPerform = null!,
                                _btnTurbo = null!, _btnEco = null!;
 
-        private PredatorButton _btnAutoFan = null!, _btnMaxFan = null!, _btnCustomFan = null!;
+        private PredatorButton? _btnGpuIntegrated, _btnGpuAuto, _btnGpuDiscrete;
+
+        private PredatorButton _btnAutoFan = null!, _btnMaxFan = null!, _btnCustomFan = null!, _btnAdvancedFan = null!;
+        private PredatorSlider _cpuFanSlider = null!, _gpuFanSlider = null!;
+        private Label _lblCpuFanHdr = null!, _lblGpuFanHdr = null!;
+        private Panel _pnlCustomFans = null!;
+        private Panel _pnlAdvancedFans = null!;
+        private PredatorButton _btnGraphicalSettings = null!;
+        private FanCurveController _fanCurve = null!;
+        private bool _isUpdatingFanSliders;
         private PredatorButton _btn60Hz = null!, _btnMaxHz = null!;
 
         private PredatorDropDown _rgbDropDown = null!;
@@ -114,7 +126,7 @@ namespace PredatorControlApp
 
         private PredatorSlider _brightnessSlider = null!, _speedSlider = null!;
         
-        private PredatorButton? _activePowerBtn, _activeFanBtn, _activeDisplayBtn;
+        private PredatorButton? _activePowerBtn, _activeGraphicsBtn, _activeFanBtn, _activeDisplayBtn;
         private bool _isUpdatingBattery;
 
         private PredatorSwitch _switchBatteryLimit = null!;
@@ -126,12 +138,16 @@ namespace PredatorControlApp
         private Label _lblGameSyncStatus = null!;
         private PredatorButton _btnConfigureGames = null!;
         private bool _isGameSyncOverriding;
+        private PredatorKeyListener? _predatorKey;
+        private GlobalHotkeyListener? _globalHotkey;
+        private AppSettings _appSettings = AppSettings.Load();
 
         private static readonly string[] RgbModeNames = { "Static", "Breathing", "Neon", "Wave", "Shifting", "Zoom", "Meteor", "Twinkling" };
 
         private ToolStripMenuItem _trayPowerQuiet = null!, _trayPowerBal = null!, _trayPowerPerf = null!,
                                   _trayPowerTurbo = null!, _trayPowerEco = null!;
-        private ToolStripMenuItem _trayFanAuto = null!, _trayFanMax = null!, _trayFanCustom = null!;
+        private ToolStripMenuItem? _trayGraphicsIntegrated, _trayGraphicsAuto, _trayGraphicsDiscrete;
+        private ToolStripMenuItem _trayFanAuto = null!, _trayFanMax = null!, _trayFanCustom = null!, _trayFanAdvanced = null!;
         private ToolStripMenuItem _trayDisplay60 = null!, _trayDisplayMax = null!;
         private ToolStripMenuItem _trayBatteryLimit80 = null!, _trayBatteryLimit100 = null!;
         private ToolStripMenuItem _trayBatteryMenu = null!;
@@ -161,6 +177,9 @@ namespace PredatorControlApp
             InitializeComponent();
             this.DoubleBuffered = true;
             _maxHz = GetMaxRefreshRate();
+            _wmi.ProbeCustomFanSupport();
+            _wmi.ProbeGraphicsModeSupport();
+            _fanCurve = new FanCurveController(_wmi);
 
             _dpiScale = this.DeviceDpi / 96f;
 
@@ -168,6 +187,9 @@ namespace PredatorControlApp
             BuildTrayMenu();
             SetupSystemTray();
             RegisterStartup();
+            ApplyTheme();
+            HandleCreated += (_, _) => SetupPredatorKey();
+            AppTheme.Changed += OnThemeChanged;
 
             if (GetCurrentRefreshRate() <= 60)
             {
@@ -204,7 +226,13 @@ namespace PredatorControlApp
 
         protected override void WndProc(ref Message m)
         {
-            if (m.Msg == WM_SHOWME) ShowApp();
+            if (_globalHotkey?.ProcessWndProc(ref m) == true) return;
+
+            if (m.Msg == WM_SHOWME)
+            {
+                ShowApp();
+                return;
+            }
             base.WndProc(ref m);
         }
 
@@ -254,6 +282,32 @@ namespace PredatorControlApp
             _trayIcon.Text = "Predator Control";
             _trayIcon.Visible = true;
             _trayIcon.DoubleClick += (s, e) => ShowApp();
+            UpdateTrayHotkeyHint();
+        }
+
+        private void UpdateTrayHotkeyHint()
+        {
+            UpdateTrayTooltip(_lastTrayCpuMhz, _lastTrayGpuMhz);
+        }
+
+        private void UpdateTrayTooltip(int? cpuMhz, int? gpuMhz)
+        {
+            _lastTrayCpuMhz = cpuMhz;
+            _lastTrayGpuMhz = gpuMhz;
+
+            string hotkey = _globalHotkey?.HotkeyDisplayName ?? _appSettings.ToggleHotkeyDisplayName();
+            string cpuTempTray = _cpuTemp > 0 ? $"{_cpuTemp}°C" : "N/A";
+            string gpuTempTray = _gpuTemp > 0 ? $"{_gpuTemp}°C" : "N/A";
+            string cpuClockTray = cpuMhz > 0 ? $"{cpuMhz} MHz" : "--";
+            string gpuClockTray = gpuMhz > 0 ? $"{gpuMhz} MHz" : "--";
+            string cpuFanTray = _cpuFanRpm > 0 ? $"{_cpuFanRpm}" : "N/A";
+            string gpuFanTray = _gpuFanRpm > 0 ? $"{_gpuFanRpm}" : "N/A";
+
+            _trayIcon.Text =
+                $"Predator Control ({hotkey})\n" +
+                $"CPU: {cpuTempTray} · {cpuClockTray}\n" +
+                $"GPU: {gpuTempTray} · {gpuClockTray}\n" +
+                $"Fans: {cpuFanTray} / {gpuFanTray} RPM";
         }
 
         private void BuildTrayMenu()
@@ -268,11 +322,22 @@ namespace PredatorControlApp
             _trayPowerEco = new ToolStripMenuItem("Eco", null, (s, e) => ApplyPowerMode(0x06, _btnEco));
             powerMenu.DropDownItems.AddRange([_trayPowerQuiet, _trayPowerBal, _trayPowerPerf, _trayPowerTurbo, _trayPowerEco]);
 
+            ToolStripMenuItem? graphicsMenu = null;
+            if (_wmi.SupportsGraphicsMode)
+            {
+                graphicsMenu = new ToolStripMenuItem("  Graphics");
+                _trayGraphicsIntegrated = new ToolStripMenuItem("Integrated", null, (s, e) => ApplyGraphicsMode(WmiController.GraphicsModeIntegrated, _btnGpuIntegrated!));
+                _trayGraphicsAuto = new ToolStripMenuItem("Auto", null, (s, e) => ApplyGraphicsMode(WmiController.GraphicsModeAuto, _btnGpuAuto!));
+                _trayGraphicsDiscrete = new ToolStripMenuItem("Discrete", null, (s, e) => ApplyGraphicsMode(WmiController.GraphicsModeDiscrete, _btnGpuDiscrete!));
+                graphicsMenu.DropDownItems.AddRange([_trayGraphicsIntegrated, _trayGraphicsAuto, _trayGraphicsDiscrete]);
+            }
+
             var fanMenu = new ToolStripMenuItem("  Fan Mode");
             _trayFanAuto = new ToolStripMenuItem("Auto", null, (s, e) => ApplyFanMode(0x01, _btnAutoFan));
             _trayFanMax = new ToolStripMenuItem("Max", null, (s, e) => ApplyFanMode(0x02, _btnMaxFan));
             _trayFanCustom = new ToolStripMenuItem("Custom", null, (s, e) => ApplyFanMode(0x03, _btnCustomFan));
-            fanMenu.DropDownItems.AddRange([_trayFanAuto, _trayFanMax, _trayFanCustom]);
+            _trayFanAdvanced = new ToolStripMenuItem("Advanced", null, (s, e) => ApplyFanMode(FanCurveController.FanModeAdvanced, _btnAdvancedFan));
+            fanMenu.DropDownItems.AddRange([_trayFanAuto, _trayFanMax, _trayFanCustom, _trayFanAdvanced]);
 
             var displayMenu = new ToolStripMenuItem("  Display");
             _trayDisplay60 = new ToolStripMenuItem("60 Hz", null, (s, e) => ApplyDisplayMode(60, _btn60Hz));
@@ -297,6 +362,8 @@ namespace PredatorControlApp
             _trayBatteryMenu.DropDownItems.AddRange([_trayBatteryLimit80, _trayBatteryLimit100]);
 
             _trayMenu.Items.Add(powerMenu);
+            if (graphicsMenu != null)
+                _trayMenu.Items.Add(graphicsMenu);
             _trayMenu.Items.Add(fanMenu);
             _trayMenu.Items.Add(displayMenu);
             _trayMenu.Items.Add(_trayBatteryMenu);
@@ -313,14 +380,19 @@ namespace PredatorControlApp
         private void BuildUI()
         {
             this.Controls.Clear();
-            this.BackColor = FormBg;
-            this.ForeColor = Color.White;
+            this.BackColor = AppTheme.FormBackground;
+            this.ForeColor = AppTheme.PrimaryText;
 
             _formW = S(450);
-            this.ClientSize = new Size(_formW, S(880));
+            BorderlessResizeHelper.ApplyTo(this, S(380), S(520));
             this.FormBorderStyle = FormBorderStyle.None;
             this.StartPosition = FormStartPosition.CenterScreen;
             try { this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+
+            int secAfterHeader = S(16);
+            int secAfterBtn = S(16);
+            int sepGap = S(12);
+            int rowGap = S(20);
 
             int pad = S(24);
             int contentW = _formW - pad * 2;
@@ -328,49 +400,77 @@ namespace PredatorControlApp
             int btnH = S(34);
             int y = 0;
 
-            var pnlTitle = new Panel { Height = S(40), Width = _formW, BackColor = Color.FromArgb(18, 18, 21) };
-            pnlTitle.MouseDown += TitleBar_MouseDown;
-            this.Controls.Add(pnlTitle);
+            _pnlBody = new Panel { Dock = DockStyle.Fill, BackColor = Color.Transparent, AutoScroll = true };
+            this.Controls.Add(_pnlBody);
+
+            _pnlTitle = new Panel { Height = S(40), Dock = DockStyle.Top, BackColor = AppTheme.TitleBarBackground };
+            _pnlTitle.MouseDown += TitleBar_MouseDown;
+            this.Controls.Add(_pnlTitle);
+            _pnlTitle.Resize += (_, _) =>
+            {
+                int titlePad = S(24);
+                _lblClose.Location = new Point(_pnlTitle.Width - titlePad - S(16), S(9));
+                _lblMinimize.Location = new Point(_lblClose.Left - S(28), S(9));
+            };
             var picIcon = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, Size = new Size(S(16), S(16)), Location = new Point(pad - S(4), S(12)), BackColor = Color.Transparent };
             try { var extIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); if (extIcon != null) picIcon.Image = extIcon.ToBitmap(); } catch { }
             picIcon.MouseDown += TitleBar_MouseDown;
-            pnlTitle.Controls.Add(picIcon);
+            _pnlTitle.Controls.Add(picIcon);
 
-            _lblTitle = new Label { Text = "Predator Control", ForeColor = Color.White, Font = FontTitle, AutoSize = true, Location = new Point(pad + S(20), S(11)), BackColor = Color.Transparent };
+            _lblTitle = new Label { Text = "Predator Control", ForeColor = AppTheme.PrimaryText, Font = FontTitle, AutoSize = true, Location = new Point(pad + S(20), S(11)), BackColor = Color.Transparent, Tag = "title" };
             _lblTitle.MouseDown += TitleBar_MouseDown;
-            pnlTitle.Controls.Add(_lblTitle);
+            _pnlTitle.Controls.Add(_lblTitle);
 
-            var lblClose = new Label { Text = "●", ForeColor = Color.FromArgb(255, 95, 86), Font = new Font("Arial", 12f), AutoSize = true, Location = new Point(_formW - pad - S(4), S(9)), Cursor = Cursors.Hand, BackColor = Color.Transparent };
-            var lblMin = new Label { Text = "●", ForeColor = Color.FromArgb(255, 189, 46), Font = new Font("Arial", 12f), AutoSize = true, Location = new Point(lblClose.Left - S(20), S(9)), Cursor = Cursors.Hand, BackColor = Color.Transparent };
-            
-            lblClose.Click += (s, e) => { this.Close(); };
-            lblMin.Click += (s, e) => { this.WindowState = FormWindowState.Minimized; };
-            
-            pnlTitle.Controls.Add(lblClose);
-            pnlTitle.Controls.Add(lblMin);
+            var captionFont = new Font("Segoe UI", 10f, FontStyle.Regular);
+            _lblClose = new Label { Text = "\u2715", ForeColor = AppTheme.CaptionButton, Font = captionFont, AutoSize = true, Location = new Point(_formW - pad - S(16), S(9)), Cursor = Cursors.Hand, BackColor = Color.Transparent, Tag = "caption-close", Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            _lblMinimize = new Label { Text = "\u2014", ForeColor = AppTheme.CaptionButton, Font = captionFont, AutoSize = true, Location = new Point(_lblClose.Left - S(28), S(9)), Cursor = Cursors.Hand, BackColor = Color.Transparent, Tag = "caption-min", Anchor = AnchorStyles.Top | AnchorStyles.Right };
 
-            y = pnlTitle.Bottom + S(24);
+            _lblClose.Click += (s, e) => { this.Close(); };
+            _lblMinimize.Click += (s, e) => { this.WindowState = FormWindowState.Minimized; };
+            _lblClose.MouseEnter += (s, e) => _lblClose.ForeColor = AppTheme.CaptionCloseHover;
+            _lblClose.MouseLeave += (s, e) => _lblClose.ForeColor = AppTheme.CaptionButton;
+            _lblMinimize.MouseEnter += (s, e) => _lblMinimize.ForeColor = AppTheme.CaptionButtonHover;
+            _lblMinimize.MouseLeave += (s, e) => _lblMinimize.ForeColor = AppTheme.CaptionButton;
 
-            MakeLabel("CPU:", pad, y, FontBody, SubHeaderColor);
-            _lblCpuTemp = MakeLabel("43°C", pad + S(34), y, FontBodyBold, Color.White);
+            _pnlTitle.Controls.Add(_lblClose);
+            _pnlTitle.Controls.Add(_lblMinimize);
 
-            MakeLabel("GPU:", _formW / 2 + S(10), y, FontBody, SubHeaderColor);
-            _lblGpuTemp = MakeLabel("39°C", _formW / 2 + S(46), y, FontBodyBold, Color.White);
+            y = S(16);
 
-            y += S(24);
-            MakeLabel("Fan speed:", pad, y, FontBody, SubHeaderColor);
-            _lblFanStatus = MakeLabel("Auto", pad + S(74), y, FontBodyBold, Color.White);
+            MakeLabel("CPU:", pad, y, FontBody, AppTheme.SecondaryText, "sub");
+            _lblCpuTemp = MakeLabel("43°C", pad + S(34), y, FontBodyBold, AppTheme.PrimaryText, "value");
 
-            MakeLabel("Power:", _formW / 2 + S(10), y, FontBody, SubHeaderColor);
-            _lblPowerStatus = MakeLabel("Plugged In", _formW / 2 + S(56), y, FontBodyBold, Color.White);
+            MakeLabel("GPU:", _formW / 2 + S(10), y, FontBody, AppTheme.SecondaryText, "sub");
+            _lblGpuTemp = MakeLabel("39°C", _formW / 2 + S(46), y, FontBodyBold, AppTheme.PrimaryText, "value");
 
-            y += S(30);
+            y += rowGap;
+            MakeLabel("CPU clock:", pad, y, FontBody, AppTheme.SecondaryText, "sub");
+            _lblCpuClock = MakeLabel("-- MHz", pad + S(74), y, FontBodyBold, AppTheme.PrimaryText, "value");
+
+            MakeLabel("GPU clock:", _formW / 2 + S(10), y, FontBody, AppTheme.SecondaryText, "sub");
+            _lblGpuClock = MakeLabel("-- MHz", _formW / 2 + S(84), y, FontBodyBold, AppTheme.PrimaryText, "value");
+
+            y += rowGap;
+            MakeLabel("CPU fan:", pad, y, FontBody, AppTheme.SecondaryText, "sub");
+            _lblCpuFanRpm = MakeLabel("-- RPM", pad + S(62), y, FontBodyBold, AppTheme.PrimaryText, "value");
+
+            MakeLabel("GPU fan:", _formW / 2 + S(10), y, FontBody, AppTheme.SecondaryText, "sub");
+            _lblGpuFanRpm = MakeLabel("-- RPM", _formW / 2 + S(72), y, FontBodyBold, AppTheme.PrimaryText, "value");
+
+            y += rowGap;
+            MakeLabel("Fan mode:", pad, y, FontBody, AppTheme.SecondaryText, "sub");
+            _lblFanStatus = MakeLabel("Auto", pad + S(74), y, FontBodyBold, AppTheme.PrimaryText, "value");
+
+            MakeLabel("Power:", _formW / 2 + S(10), y, FontBody, AppTheme.SecondaryText, "sub");
+            _lblPowerStatus = MakeLabel("Plugged In", _formW / 2 + S(56), y, FontBodyBold, AppTheme.PrimaryText, "value");
+
+            y += S(22);
             AddSeparator(y);
 
-            y += S(20);
+            y += sepGap;
             MakeSectionHeader("POWER MODE", pad, y);
             
-            y += S(24);
+            y += secAfterHeader;
             int btnW = (contentW - 4 * gap) / 5;
             _btnQuiet = MakeButton("Quiet", pad, y, btnW, btnH);
             _btnBalanced = MakeButton("Balanced", pad + (btnW + gap), y, btnW, btnH);
@@ -384,23 +484,118 @@ namespace PredatorControlApp
             _btnTurbo.Click += (s, e) => ApplyPowerMode(0x05, _btnTurbo);
             _btnEco.Click += (s, e) => ApplyPowerMode(0x06, _btnEco);
 
-            y += btnH + S(28);
+            y += btnH + secAfterBtn;
+            if (_wmi.SupportsGraphicsMode)
+            {
+                MakeSectionHeader("GRAPHICS", pad, y);
+
+                y += secAfterHeader;
+                int gpuBtnW = (contentW - 2 * gap) / 3;
+                _btnGpuIntegrated = MakeButton("Integrated", pad, y, gpuBtnW, btnH);
+                _btnGpuAuto = MakeButton("Auto", pad + (gpuBtnW + gap), y, gpuBtnW, btnH);
+                _btnGpuDiscrete = MakeButton("Discrete", pad + (gpuBtnW + gap) * 2, y, gpuBtnW, btnH);
+
+                _btnGpuIntegrated.Click += (s, e) => ApplyGraphicsMode(WmiController.GraphicsModeIntegrated, _btnGpuIntegrated);
+                _btnGpuAuto.Click += (s, e) => ApplyGraphicsMode(WmiController.GraphicsModeAuto, _btnGpuAuto);
+                _btnGpuDiscrete.Click += (s, e) => ApplyGraphicsMode(WmiController.GraphicsModeDiscrete, _btnGpuDiscrete);
+
+                y += btnH + secAfterBtn;
+            }
+
             MakeSectionHeader("FAN CONTROL", pad, y);
             
-            y += S(24);
-            int fanBtnW = (contentW - 2 * gap) / 3;
+            y += secAfterHeader;
+            int fanBtnW = (contentW - 3 * gap) / 4;
             _btnAutoFan = MakeButton("Auto", pad, y, fanBtnW, btnH);
             _btnMaxFan = MakeButton("Max", pad + (fanBtnW + gap), y, fanBtnW, btnH);
             _btnCustomFan = MakeButton("Custom", pad + (fanBtnW + gap) * 2, y, fanBtnW, btnH);
+            _btnAdvancedFan = MakeButton("Advanced", pad + (fanBtnW + gap) * 3, y, fanBtnW, btnH);
 
             _btnAutoFan.Click += (s, e) => ApplyFanMode(0x01, _btnAutoFan);
             _btnMaxFan.Click += (s, e) => ApplyFanMode(0x02, _btnMaxFan);
             _btnCustomFan.Click += (s, e) => ApplyFanMode(0x03, _btnCustomFan);
+            _btnAdvancedFan.Click += (s, e) => ApplyFanMode(FanCurveController.FanModeAdvanced, _btnAdvancedFan);
 
-            y += btnH + S(28);
+            y += btnH + S(12);
+            int fanSliderW = (contentW - gap) / 2;
+            int fanSliderH = S(28);
+            int customFanBlockH = S(24) + fanSliderH;
+
+            _pnlCustomFans = new Panel
+            {
+                Location = new Point(0, y),
+                Size = new Size(_formW, customFanBlockH),
+                BackColor = Color.Transparent,
+                Visible = false
+            };
+            _pnlBody.Controls.Add(_pnlCustomFans);
+
+            _lblCpuFanHdr = MakeLabelIn(_pnlCustomFans, "CPU FAN: 50%", pad, 0, FontSectionHeader, AppTheme.SecondaryText, "sub");
+            _lblGpuFanHdr = MakeLabelIn(_pnlCustomFans, "GPU FAN: 50%", _formW / 2 + S(10), 0, FontSectionHeader, AppTheme.SecondaryText, "sub");
+
+            _cpuFanSlider = new PredatorSlider
+            {
+                Location = new Point(pad, S(24)),
+                Size = new Size(fanSliderW, fanSliderH),
+                Minimum = 0,
+                Maximum = 100,
+                Value = 50,
+                Enabled = false
+            };
+            _pnlCustomFans.Controls.Add(_cpuFanSlider);
+
+            _gpuFanSlider = new PredatorSlider
+            {
+                Location = new Point(_formW / 2 + S(10), S(24)),
+                Size = new Size(fanSliderW, fanSliderH),
+                Minimum = 0,
+                Maximum = 100,
+                Value = 50,
+                Enabled = false
+            };
+            _pnlCustomFans.Controls.Add(_gpuFanSlider);
+
+            _cpuFanSlider.ValueChanged += (s, e) =>
+            {
+                if (!_isUpdatingFanSliders)
+                    _lblCpuFanHdr.Text = FormatFanSliderHeader("CPU FAN", _cpuFanSlider.Value, _cpuFanRpm);
+            };
+            _cpuFanSlider.ValueCommitted += (s, e) => ApplyCustomFanSpeeds();
+
+            _gpuFanSlider.ValueChanged += (s, e) =>
+            {
+                if (!_isUpdatingFanSliders)
+                    _lblGpuFanHdr.Text = FormatFanSliderHeader("GPU FAN", _gpuFanSlider.Value, _gpuFanRpm);
+            };
+            _gpuFanSlider.ValueCommitted += (s, e) => ApplyCustomFanSpeeds();
+
+            int advancedBlockH = btnH + S(8);
+            _pnlAdvancedFans = new Panel
+            {
+                Location = new Point(0, y),
+                Size = new Size(_formW, advancedBlockH),
+                BackColor = Color.Transparent,
+                Visible = false
+            };
+            _pnlBody.Controls.Add(_pnlAdvancedFans);
+
+            _btnGraphicalSettings = new PredatorButton
+            {
+                Text = "Curves",
+                Location = new Point(pad, 0),
+                Size = new Size(contentW, btnH)
+            };
+            _btnGraphicalSettings.Click += (s, e) =>
+            {
+                using var form = new FanCurveSettingsForm(_fanCurve, _wmi);
+                form.ShowDialog(this);
+            };
+            _pnlAdvancedFans.Controls.Add(_btnGraphicalSettings);
+
+            y += customFanBlockH + S(10);
             MakeSectionHeader("DISPLAY REFRESH RATE", pad, y);
             
-            y += S(24);
+            y += secAfterHeader;
             int dispBtnW = (contentW - gap) / 2;
             _btn60Hz = MakeButton("60 Hz", pad, y, dispBtnW, btnH);
             _btnMaxHz = MakeButton($"{_maxHz} Hz (Max)", pad + dispBtnW + gap, y, dispBtnW, btnH);
@@ -408,12 +603,12 @@ namespace PredatorControlApp
             _btn60Hz.Click += (s, e) => ApplyDisplayMode(60, _btn60Hz);
             _btnMaxHz.Click += (s, e) => ApplyDisplayMode(_maxHz, _btnMaxHz);
 
-            y += btnH + S(28);
+            y += btnH + secAfterBtn;
             MakeSectionHeader("BATTERY CHARGE LIMIT", pad, y);
 
-            y += S(24);
+            y += secAfterHeader;
             int switchH = S(30);
-            _lblBatteryStatus = MakeLabel("Full Charge (100%)", pad, y, FontBody, SubHeaderColor);
+            _lblBatteryStatus = MakeLabel("Full Charge (100%)", pad, y, FontBody, AppTheme.SecondaryText, "sub");
             CenterV(_lblBatteryStatus, y, switchH);
 
             _switchBatteryLimit = new PredatorSwitch
@@ -421,34 +616,34 @@ namespace PredatorControlApp
                 Location = new Point(_formW - pad - S(60), y),
                 Size = new Size(S(60), switchH)
             };
-            this.Controls.Add(_switchBatteryLimit);
+            _pnlBody.Controls.Add(_switchBatteryLimit);
 
             _switchBatteryLimit.CheckedChanged += (s, e) =>
             {
                 ApplyBatteryLimit(_switchBatteryLimit.Checked);
             };
 
-            y += switchH + S(28);
+            y += switchH + secAfterBtn;
             MakeSectionHeader("KEYBOARD RGB MODE", pad, y);
             
-            y += S(24);
+            y += secAfterHeader;
             int dropH = S(34);
             _rgbDropDown = new PredatorDropDown { Location = new Point(pad, y), Size = new Size(contentW, dropH) };
             foreach (var name in RgbModeNames) _rgbDropDown.Items.Add(name);
             _rgbDropDown.SelectedIndex = 3; 
-            this.Controls.Add(_rgbDropDown);
+            _pnlBody.Controls.Add(_rgbDropDown);
 
-            y += dropH + S(28);
-            _lblBrightHdr = MakeLabel("BRIGHTNESS: 100%", pad, y, FontSectionHeader, SubHeaderColor);
-            _lblSpeedHdr = MakeLabel("EFFECT SPEED: 50%", _formW / 2 + S(10), y, FontSectionHeader, SubHeaderColor);
+            y += dropH + secAfterBtn;
+            _lblBrightHdr = MakeLabel("BRIGHTNESS: 100%", pad, y, FontSectionHeader, AppTheme.SecondaryText, "sub");
+            _lblSpeedHdr = MakeLabel("EFFECT SPEED: 50%", _formW / 2 + S(10), y, FontSectionHeader, AppTheme.SecondaryText, "sub");
             
-            y += S(24);
+            y += secAfterHeader;
             int sliderW = (contentW - gap * 4) / 2;
             _brightnessSlider = new PredatorSlider { Location = new Point(pad, y), Size = new Size(sliderW, S(28)), Minimum = 0, Maximum = 100, Value = 100 };
-            this.Controls.Add(_brightnessSlider);
+            _pnlBody.Controls.Add(_brightnessSlider);
             
             _speedSlider = new PredatorSlider { Location = new Point(_formW / 2 + S(10), y), Size = new Size(sliderW, S(28)), Minimum = 1, Maximum = 100, Value = 50 };
-            this.Controls.Add(_speedSlider);
+            _pnlBody.Controls.Add(_speedSlider);
 
             _brightnessSlider.ValueChanged += (s, e) => { _lblBrightHdr.Text = $"BRIGHTNESS: {_brightnessSlider.Value}%"; };
             _brightnessSlider.ValueCommitted += (s, e) => { _wmi.SetBrightness((byte)_brightnessSlider.Value); SaveState("Brightness", _brightnessSlider.Value); };
@@ -462,54 +657,43 @@ namespace PredatorControlApp
                 int mode = _rgbDropDown.SelectedIndex;
                 if (mode == 0)
                 {
-                    Color c = _colorPicker.Color;
-                    _wmi.SetRgbMode(0, c.R, c.G, c.B, (byte)_brightnessSlider.Value, GetMappedSpeed(), 0);
+                    _keyboardColorSettings.Brightness = (byte)_brightnessSlider.Value;
+                    _wmi.ApplyKeyboardColorSettings(_keyboardColorSettings);
                     SaveState("RGB_Mode", 0);
-                    SaveState("RGB_R", c.R); SaveState("RGB_G", c.G); SaveState("RGB_B", c.B);
+                    SaveKeyboardColorState(_keyboardColorSettings);
                 }
                 else ApplyRgbModeFromDropdown(mode);
                 UpdateRgbControls(mode);
                 CheckRgbTrayFromMode(mode);
             };
 
-            y += S(44);
+            y += S(32);
             MakeSectionHeader("COLOR CUSTOMIZATION", pad, y);
             
-            y += S(24);
-            _btnColorPick = MakeButton("    Choose Custom Color", pad, y, contentW, btnH);
+            y += secAfterHeader;
+            _btnColorPick = MakeButton("    Customize Keyboard Color", pad, y, contentW, btnH);
             _btnColorPick.Paint += (s, e) => {
                 var g = e.Graphics;
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                 int cy = _btnColorPick.Height / 2;
                 int cx = _btnColorPick.Width / 2 - S(70);
-                using var brush = new SolidBrush(Color.FromArgb(0, 200, 160));
+                var previewColor = Color.FromArgb(_wmi.LastR, _wmi.LastG, _wmi.LastB);
+                using var brush = new SolidBrush(previewColor);
                 g.FillEllipse(brush, cx - S(6), cy - S(6), S(12), S(12));
-                using var glowBrush = new SolidBrush(Color.FromArgb(100, 0, 200, 160));
+                using var glowBrush = new SolidBrush(Color.FromArgb(100, previewColor));
                 g.FillEllipse(glowBrush, cx - S(8), cy - S(8), S(16), S(16));
             };
 
-            _btnColorPick.Click += (s, e) =>
-            {
-                if (_colorPicker.ShowDialog() == DialogResult.OK)
-                {
-                    Color c = _colorPicker.Color;
-                    _wmi.SetRgbMode(0, c.R, c.G, c.B, (byte)_brightnessSlider.Value, GetMappedSpeed(), 0);
-                    _rgbDropDown.SelectedIndex = 0;
-                    SaveState("RGB_Mode", 0);
-                    SaveState("RGB_R", c.R); SaveState("RGB_G", c.G); SaveState("RGB_B", c.B);
-                    UpdateRgbControls(0);
-                    CheckRgbTrayFromMode(0);
-                }
-            };
+            _btnColorPick.Click += (s, e) => OpenKeyboardColorEditor();
 
-            y += btnH + S(28);
+            y += btnH + secAfterBtn;
             AddSeparator(y);
-            y += S(20);
+            y += sepGap;
             MakeSectionHeader("GAME SYNC", pad, y);
 
-            y += S(24);
+            y += secAfterHeader;
             int syncSwitchH = S(30);
-            _lblGameSyncStatus = MakeLabel("Disabled", pad, y, FontBody, SubHeaderColor);
+            _lblGameSyncStatus = MakeLabel("Disabled", pad, y, FontBody, AppTheme.SecondaryText, "sub");
             CenterV(_lblGameSyncStatus, y, syncSwitchH);
 
             _switchGameSync = new PredatorToggle
@@ -517,7 +701,7 @@ namespace PredatorControlApp
                 Location = new Point(_formW - pad - S(48), y),
                 Size = new Size(S(48), syncSwitchH)
             };
-            this.Controls.Add(_switchGameSync);
+            _pnlBody.Controls.Add(_switchGameSync);
 
             _switchGameSync.CheckedChanged += (s, e) =>
             {
@@ -525,13 +709,86 @@ namespace PredatorControlApp
                 _lblGameSyncStatus.Text = _switchGameSync.Checked ? "Active — Monitoring" : "Disabled";
             };
 
-            y += syncSwitchH + S(10);
+            y += syncSwitchH + S(8);
             _btnConfigureGames = MakeButton("🎮  Configure Executables", pad, y, contentW, btnH);
             _btnConfigureGames.Click += (s, e) =>
             {
                 using var form = new GameSyncForm(_gameSync, _maxHz);
                 form.ShowDialog(this);
             };
+
+            this.ClientSize = new Size(_formW, S(40) + y + btnH + pad);
+            this.Paint += Form_Paint;
+
+            _pnlBody.PerformLayout();
+            _responsiveLayout = new ResponsiveLayoutHelper(this, _pnlBody.ClientSize);
+            _responsiveLayout.Snapshot(_pnlBody);
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            e.Graphics.Clear(BackColor);
+        }
+
+        private void Form_Paint(object? sender, PaintEventArgs e)
+        {
+            using var pen = new Pen(AppTheme.Separator);
+            e.Graphics.DrawRectangle(pen, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
+            if (_pnlTitle != null)
+                e.Graphics.DrawLine(pen, 0, _pnlTitle.Bottom - 1, ClientSize.Width, _pnlTitle.Bottom - 1);
+        }
+
+        private void OpenKeyboardColorEditor()
+        {
+            var settings = KeyboardColorSettings.FromWmi(_wmi);
+            settings.FourZone = _keyboardColorSettings.FourZone;
+            settings.SolidColor = _keyboardColorSettings.SolidColor;
+            settings.Brightness = (byte)_brightnessSlider.Value;
+            for (int i = 0; i < 4; i++)
+                settings.ZoneColors[i] = _keyboardColorSettings.ZoneColors[i];
+
+            if (!KeyboardColorForm.TryShow(this, settings, out var result)) return;
+
+            _keyboardColorSettings = result;
+            _wmi.ApplyKeyboardColorSettings(result);
+            _brightnessSlider.Value = result.Brightness;
+            _rgbDropDown.SelectedIndex = 0;
+            SaveState("RGB_Mode", 0);
+            SaveKeyboardColorState(result);
+            UpdateRgbControls(0);
+            CheckRgbTrayFromMode(0);
+            _btnColorPick.Invalidate();
+        }
+
+        private void SaveKeyboardColorState(KeyboardColorSettings settings)
+        {
+            SaveState("RGB_R", settings.SolidColor.R);
+            SaveState("RGB_G", settings.SolidColor.G);
+            SaveState("RGB_B", settings.SolidColor.B);
+            SaveState("RGB_FourZone", settings.FourZone ? 1 : 0);
+            SaveState("Brightness", settings.Brightness);
+            for (int i = 0; i < 4; i++)
+            {
+                SaveState($"RGB_Z{i}R", settings.ZoneColors[i].R);
+                SaveState($"RGB_Z{i}G", settings.ZoneColors[i].G);
+                SaveState($"RGB_Z{i}B", settings.ZoneColors[i].B);
+            }
+        }
+
+        private void LoadKeyboardColorState(RegistryKey key)
+        {
+            int savedR = (int)key.GetValue("RGB_R", 0);
+            int savedG = (int)key.GetValue("RGB_G", 150);
+            int savedB = (int)key.GetValue("RGB_B", 255);
+            _keyboardColorSettings.SolidColor = Color.FromArgb(savedR, savedG, savedB);
+            _keyboardColorSettings.FourZone = (int)key.GetValue("RGB_FourZone", 0) == 1;
+            for (int i = 0; i < 4; i++)
+            {
+                int zr = (int)key.GetValue($"RGB_Z{i}R", savedR);
+                int zg = (int)key.GetValue($"RGB_Z{i}G", savedG);
+                int zb = (int)key.GetValue($"RGB_Z{i}B", savedB);
+                _keyboardColorSettings.ZoneColors[i] = Color.FromArgb(zr, zg, zb);
+            }
         }
 
         private void UpdateRgbControls(int mode)
@@ -543,30 +800,90 @@ namespace PredatorControlApp
 
         private void MakeSectionHeader(string label, int x, int y)
         {
-            MakeLabel(label, x, y, FontSectionHeader, HeaderColor);
+            MakeLabel(label, x, y, FontSectionHeader, AppTheme.SectionHeader, "section");
         }
 
-        private Label MakeLabel(string text, int x, int y, Font font, Color color)
+        private Label MakeLabel(string text, int x, int y, Font font, Color color, string? tag = null)
         {
             var lbl = new Label
             {
-                Text = text, Location = new Point(x, y), AutoSize = true, Font = font, ForeColor = color, BackColor = Color.Transparent
+                Text = text, Location = new Point(x, y), AutoSize = true, Font = font, ForeColor = color, BackColor = Color.Transparent, Tag = tag
             };
-            this.Controls.Add(lbl);
+            _pnlBody.Controls.Add(lbl);
+            return lbl;
+        }
+
+        private Label MakeLabelIn(Control parent, string text, int x, int y, Font font, Color color, string? tag = null)
+        {
+            var lbl = new Label
+            {
+                Text = text, Location = new Point(x, y), AutoSize = true, Font = font, ForeColor = color, BackColor = Color.Transparent, Tag = tag
+            };
+            parent.Controls.Add(lbl);
             return lbl;
         }
 
         private PredatorButton MakeButton(string text, int x, int y, int width, int height)
         {
             var btn = new PredatorButton { Text = text, Location = new Point(x, y), Size = new Size(width, height) };
-            this.Controls.Add(btn);
+            _pnlBody.Controls.Add(btn);
             return btn;
         }
 
         private void AddSeparator(int y)
         {
             int pad = S(24);
-            this.Controls.Add(new Panel { Location = new Point(pad, y), Size = new Size(_formW - pad * 2, 1), BackColor = SeparatorColor });
+            _pnlBody.Controls.Add(new Panel { Location = new Point(pad, y), Size = new Size(_formW - pad * 2, 1), BackColor = AppTheme.Separator, Tag = "separator" });
+        }
+
+        private void OnThemeChanged(object? sender, EventArgs e) => ApplyTheme();
+
+        private void ApplyTheme()
+        {
+            if (_lblTitle == null) return;
+
+            this.BackColor = AppTheme.FormBackground;
+            this.ForeColor = AppTheme.PrimaryText;
+            _pnlTitle.BackColor = AppTheme.TitleBarBackground;
+            _lblTitle.ForeColor = AppTheme.PrimaryText;
+            _lblMinimize.ForeColor = AppTheme.CaptionButton;
+            _lblClose.ForeColor = AppTheme.CaptionButton;
+
+            foreach (Control control in this.Controls)
+                ApplyThemeToControl(control);
+
+            if (_pnlCustomFans != null)
+            {
+                foreach (Control control in _pnlCustomFans.Controls)
+                    ApplyThemeToControl(control);
+            }
+
+            _lblCpuTemp.ForeColor = AppTheme.TempColor(_cpuTemp);
+            _lblGpuTemp.ForeColor = AppTheme.TempColor(_gpuTemp);
+            _trayMenu.Renderer = new ToolStripSystemRenderer();
+            Invalidate(true);
+        }
+
+        private static void ApplyThemeToControl(Control control)
+        {
+            switch (control.Tag as string)
+            {
+                case "section":
+                    control.ForeColor = AppTheme.SectionHeader;
+                    break;
+                case "sub":
+                    control.ForeColor = AppTheme.SecondaryText;
+                    break;
+                case "value":
+                    control.ForeColor = AppTheme.PrimaryText;
+                    break;
+                case "separator":
+                    control.BackColor = AppTheme.Separator;
+                    break;
+            }
+
+            foreach (Control child in control.Controls)
+                ApplyThemeToControl(child);
         }
 
         private void CenterV(Label lbl, int controlY, int controlH)
@@ -604,9 +921,57 @@ namespace PredatorControlApp
             CheckTrayItem(trayItem, _trayPowerQuiet, _trayPowerBal, _trayPowerPerf, _trayPowerTurbo, _trayPowerEco);
         }
 
+        private void ApplyGraphicsMode(byte mode, PredatorButton btn)
+        {
+            // Stub — GPU mux on PHN18 is NVIDIA DDS, not WMI misc 0x0F.
+            HighlightBtn(btn, ref _activeGraphicsBtn);
+            SaveState("Graphics", mode);
+
+            if (_trayGraphicsIntegrated == null || _trayGraphicsAuto == null || _trayGraphicsDiscrete == null)
+                return;
+
+            var trayItem = mode switch
+            {
+                WmiController.GraphicsModeIntegrated => _trayGraphicsIntegrated,
+                WmiController.GraphicsModeDiscrete => _trayGraphicsDiscrete,
+                _ => _trayGraphicsAuto
+            };
+            CheckTrayItem(trayItem, _trayGraphicsIntegrated, _trayGraphicsAuto, _trayGraphicsDiscrete);
+        }
+
+        private PredatorButton GraphicsByteToBtn(byte mode) => mode switch
+        {
+            WmiController.GraphicsModeIntegrated => _btnGpuIntegrated!,
+            WmiController.GraphicsModeDiscrete => _btnGpuDiscrete!,
+            _ => _btnGpuAuto!
+        };
+
         private void ApplyFanMode(byte mode, PredatorButton btn)
         {
-            _wmi.SetFanBehavior(mode);
+            _fanCurve.Stop();
+
+            if (mode == 0x03)
+            {
+                if (_wmi.SupportsCustomFanSpeed)
+                    ApplyCustomFanSpeeds();
+                else
+                    _wmi.SetFanBehavior(0x03);
+                UpdateCustomFanPanel(true);
+                UpdateAdvancedFanPanel(false);
+            }
+            else if (mode == FanCurveController.FanModeAdvanced)
+            {
+                _fanCurve.Start();
+                UpdateCustomFanPanel(false);
+                UpdateAdvancedFanPanel(true);
+            }
+            else
+            {
+                _wmi.SetFanBehavior(mode);
+                UpdateCustomFanPanel(false);
+                UpdateAdvancedFanPanel(false);
+            }
+
             HighlightBtn(btn, ref _activeFanBtn);
             SaveState("Fan", mode);
 
@@ -614,6 +979,7 @@ namespace PredatorControlApp
             {
                 0x02 => "Max",
                 0x03 => "Custom",
+                FanCurveController.FanModeAdvanced => "Advanced",
                 _ => "Auto"
             };
 
@@ -621,9 +987,87 @@ namespace PredatorControlApp
             {
                 0x01 => _trayFanAuto,
                 0x02 => _trayFanMax,
-                _ => _trayFanCustom
+                0x03 => _trayFanCustom,
+                FanCurveController.FanModeAdvanced => _trayFanAdvanced,
+                _ => _trayFanAuto
             };
-            CheckTrayItem(trayItem, _trayFanAuto, _trayFanMax, _trayFanCustom);
+            CheckTrayItem(trayItem, _trayFanAuto, _trayFanMax, _trayFanCustom, _trayFanAdvanced);
+        }
+
+        private static string FormatFanSliderHeader(string name, int percent, int rpm)
+        {
+            string rpmText = rpm > 0 ? $" · {rpm} RPM" : "";
+            return $"{name}: {percent}%{rpmText}";
+        }
+
+        private void UpdateFanRpmDisplay()
+        {
+            _lblCpuFanRpm.Text = _cpuFanRpm > 0 ? $"{_cpuFanRpm} RPM" : "-- RPM";
+            _lblGpuFanRpm.Text = _gpuFanRpm > 0 ? $"{_gpuFanRpm} RPM" : "-- RPM";
+
+            if (_pnlCustomFans != null && _pnlCustomFans.Visible && _wmi.SupportsCustomFanSpeed)
+            {
+                _lblCpuFanHdr.Text = FormatFanSliderHeader("CPU FAN", _cpuFanSlider.Value, _cpuFanRpm);
+                _lblGpuFanHdr.Text = FormatFanSliderHeader("GPU FAN", _gpuFanSlider.Value, _gpuFanRpm);
+            }
+        }
+
+        private void ApplyCustomFanSpeeds()
+        {
+            if (_activeFanBtn != _btnCustomFan || !_wmi.SupportsCustomFanSpeed) return;
+
+            byte cpu = (byte)_cpuFanSlider.Value;
+            byte gpu = (byte)_gpuFanSlider.Value;
+            _wmi.SetCustomFanSpeeds(cpu, gpu);
+
+            SaveState("FanCpu", cpu);
+            SaveState("FanGpu", gpu);
+            UpdateFanRpmDisplay();
+        }
+
+        private void UpdateAdvancedFanPanel(bool visible)
+        {
+            if (_pnlAdvancedFans == null) return;
+            _pnlAdvancedFans.Visible = visible;
+            _btnGraphicalSettings.Enabled = visible;
+        }
+
+        private void UpdateCustomFanPanel(bool visible)
+        {
+            if (_pnlCustomFans == null) return;
+
+            bool canControl = visible && _wmi.SupportsCustomFanSpeed;
+            _pnlCustomFans.Visible = visible;
+            _cpuFanSlider.Enabled = canControl;
+            _gpuFanSlider.Enabled = canControl;
+            _lblCpuFanHdr.Enabled = canControl;
+            _lblGpuFanHdr.Enabled = canControl;
+
+            if (visible && !canControl)
+            {
+                _lblCpuFanHdr.Text = "CPU FAN: use PredatorSense profile";
+                _lblGpuFanHdr.Text = "GPU FAN: use PredatorSense profile";
+            }
+            else if (canControl)
+            {
+                UpdateFanRpmDisplay();
+            }
+        }
+
+        private void SetFanSliderValues(int cpu, int gpu)
+        {
+            _isUpdatingFanSliders = true;
+            try
+            {
+                _cpuFanSlider.Value = Math.Clamp(cpu, 0, 100);
+                _gpuFanSlider.Value = Math.Clamp(gpu, 0, 100);
+                _lblCpuFanHdr.Text = FormatFanSliderHeader("CPU FAN", _cpuFanSlider.Value, _cpuFanRpm);
+                _lblGpuFanHdr.Text = FormatFanSliderHeader("GPU FAN", _gpuFanSlider.Value, _gpuFanRpm);
+            }
+            finally
+            {
+                _isUpdatingFanSliders = false;
+            }
         }
 
         private void ApplyDisplayMode(int hz, PredatorButton btn)
@@ -726,7 +1170,8 @@ namespace PredatorControlApp
         {
             if (_activeFanBtn == _btnMaxFan) return 0x02;
             if (_activeFanBtn == _btnCustomFan) return 0x03;
-            return 0x01; 
+            if (_activeFanBtn == _btnAdvancedFan) return FanCurveController.FanModeAdvanced;
+            return 0x01;
         }
 
         private PredatorButton PowerByteToBtn(byte mode) => mode switch
@@ -742,6 +1187,7 @@ namespace PredatorControlApp
         {
             0x02 => _btnMaxFan,
             0x03 => _btnCustomFan,
+            FanCurveController.FanModeAdvanced => _btnAdvancedFan,
             _ => _btnAutoFan
         };
 
@@ -776,11 +1222,36 @@ namespace PredatorControlApp
                 int mode = profile.RgbMode;
                 byte bright = profile.RgbBrightness >= 0 ? (byte)profile.RgbBrightness : (byte)_brightnessSlider.Value;
                 byte speed = profile.RgbSpeed >= 0 ? (byte)Math.Clamp(Math.Round(profile.RgbSpeed * 9.0 / 100.0), 1, 9) : GetMappedSpeed();
-                byte r = profile.RgbR >= 0 ? (byte)profile.RgbR : _wmi.LastR;
-                byte g = profile.RgbG >= 0 ? (byte)profile.RgbG : _wmi.LastG;
-                byte b = profile.RgbB >= 0 ? (byte)profile.RgbB : _wmi.LastB;
 
-                _wmi.SetRgbMode(mode, r, g, b, bright, speed, 0);
+                if (mode == 0 && profile.RgbFourZone == 1)
+                {
+                    var colorSettings = new KeyboardColorSettings
+                    {
+                        FourZone = true,
+                        Brightness = bright,
+                        SolidColor = Color.FromArgb(
+                            profile.RgbR >= 0 ? profile.RgbR : _wmi.LastR,
+                            profile.RgbG >= 0 ? profile.RgbG : _wmi.LastG,
+                            profile.RgbB >= 0 ? profile.RgbB : _wmi.LastB)
+                    };
+                    for (int i = 0; i < 4; i++)
+                    {
+                        int zr = profile.RgbZoneR[i] >= 0 ? profile.RgbZoneR[i] : colorSettings.SolidColor.R;
+                        int zg = profile.RgbZoneG[i] >= 0 ? profile.RgbZoneG[i] : colorSettings.SolidColor.G;
+                        int zb = profile.RgbZoneB[i] >= 0 ? profile.RgbZoneB[i] : colorSettings.SolidColor.B;
+                        colorSettings.ZoneColors[i] = Color.FromArgb(zr, zg, zb);
+                    }
+                    _wmi.ApplyKeyboardColorSettings(colorSettings);
+                    _keyboardColorSettings = colorSettings;
+                }
+                else
+                {
+                    byte r = profile.RgbR >= 0 ? (byte)profile.RgbR : _wmi.LastR;
+                    byte g = profile.RgbG >= 0 ? (byte)profile.RgbG : _wmi.LastG;
+                    byte b = profile.RgbB >= 0 ? (byte)profile.RgbB : _wmi.LastB;
+                    _wmi.SetRgbMode(mode, r, g, b, bright, speed, 0);
+                }
+
                 if (_rgbDropDown.SelectedIndex != mode)
                     _rgbDropDown.SelectedIndex = mode;
                 if (profile.RgbBrightness >= 0)
@@ -848,6 +1319,9 @@ namespace PredatorControlApp
                 using var key = Registry.CurrentUser.CreateSubKey(@"SOFTWARE\PredatorControl");
                 int savedPower = (int)key.GetValue("Power", 0x01);
                 int savedFan = (int)key.GetValue("Fan", 0x01);
+                int savedFanCpu = (int)key.GetValue("FanCpu", 50);
+                int savedFanGpu = (int)key.GetValue("FanGpu", 50);
+                SetFanSliderValues(savedFanCpu, savedFanGpu);
                 int savedRgbMode = (int)key.GetValue("RGB_Mode", 3);
                 int savedBrightness = (int)key.GetValue("Brightness", 100);
                 int savedSpeed = (int)key.GetValue("RGB_Speed", 50);
@@ -855,7 +1329,7 @@ namespace PredatorControlApp
                 int savedR = (int)key.GetValue("RGB_R", 0);
                 int savedG = (int)key.GetValue("RGB_G", 150);
                 int savedB = (int)key.GetValue("RGB_B", 255);
-                _colorPicker.Color = Color.FromArgb(savedR, savedG, savedB);
+                LoadKeyboardColorState(key);
 
                 _brightnessSlider.Value = Math.Clamp(savedBrightness, 0, 100);
                 if (_lblBrightHdr != null) _lblBrightHdr.Text = $"BRIGHTNESS: {_brightnessSlider.Value}%";
@@ -872,10 +1346,32 @@ namespace PredatorControlApp
                 };
                 ApplyPowerMode(powerMode, powerBtn);
 
+                if (_wmi.SupportsGraphicsMode && _btnGpuIntegrated != null)
+                {
+                    int savedGraphics = (int)key.GetValue("Graphics", WmiController.GraphicsModeAuto);
+                    byte graphicsMode = savedGraphics switch
+                    {
+                        WmiController.GraphicsModeIntegrated => WmiController.GraphicsModeIntegrated,
+                        WmiController.GraphicsModeDiscrete => WmiController.GraphicsModeDiscrete,
+                        _ => WmiController.GraphicsModeAuto
+                    };
+
+                    HighlightBtn(GraphicsByteToBtn(graphicsMode), ref _activeGraphicsBtn);
+                    var trayItem = graphicsMode switch
+                    {
+                        WmiController.GraphicsModeIntegrated => _trayGraphicsIntegrated,
+                        WmiController.GraphicsModeDiscrete => _trayGraphicsDiscrete,
+                        _ => _trayGraphicsAuto
+                    };
+                    if (trayItem != null)
+                        CheckTrayItem(trayItem, _trayGraphicsIntegrated!, _trayGraphicsAuto!, _trayGraphicsDiscrete!);
+                }
+
                 var (fanMode, fanBtn) = savedFan switch
                 {
                     0x02 => ((byte)0x02, _btnMaxFan),
                     0x03 => ((byte)0x03, _btnCustomFan),
+                    FanCurveController.FanModeAdvanced => (FanCurveController.FanModeAdvanced, _btnAdvancedFan),
                     _ => ((byte)0x01, _btnAutoFan)
                 };
                 ApplyFanMode(fanMode, fanBtn);
@@ -883,7 +1379,8 @@ namespace PredatorControlApp
                 int clampedMode = Math.Clamp(savedRgbMode, 0, 7);
                 if (clampedMode == 0)
                 {
-                    _wmi.SetStaticColor((byte)savedR, (byte)savedG, (byte)savedB, (byte)savedBrightness);
+                    _keyboardColorSettings.Brightness = (byte)savedBrightness;
+                    _wmi.ApplyKeyboardColorSettings(_keyboardColorSettings);
                     _rgbDropDown.SelectedIndex = 0;
                     UpdateRgbControls(0);
                     CheckRgbTrayFromMode(0);
@@ -912,7 +1409,7 @@ namespace PredatorControlApp
                     _switchBatteryLimit.Checked = false;
                     _switchBatteryLimit.Enabled = false;
                     _lblBatteryStatus.Text = "Not Supported";
-                    _lblBatteryStatus.ForeColor = SubHeaderColor;
+                    _lblBatteryStatus.ForeColor = AppTheme.SecondaryText;
                     _trayBatteryLimit80.Enabled = false;
                     _trayBatteryLimit100.Enabled = false;
                     _trayBatteryMenu.Enabled = false;
@@ -933,6 +1430,22 @@ namespace PredatorControlApp
             catch { }
         }
 
+        private void SetupPredatorKey()
+        {
+            if (_globalHotkey == null)
+            {
+                _globalHotkey = new GlobalHotkeyListener(this, _appSettings);
+                _globalHotkey.HotkeyPressed += (_, _) => ToggleApp();
+                _globalHotkey.Start();
+                UpdateTrayHotkeyHint();
+            }
+
+            if (_predatorKey != null) return;
+            _predatorKey = new PredatorKeyListener(this, _appSettings);
+            _predatorKey.KeyPressed += (_, _) => ToggleApp();
+            _predatorKey.Start();
+        }
+
         #endregion
 
         #region Telemetry & Power Rules
@@ -948,13 +1461,55 @@ namespace PredatorControlApp
 
             _cpuTemp = _wmi.CpuTemp;
             _gpuTemp = _wmi.GpuTemp;
+            _cpuFanRpm = _wmi.CpuFanRpm;
+            _gpuFanRpm = _wmi.GpuFanRpm;
 
             _lblCpuTemp.Text = _cpuTemp > 0 ? $"{_cpuTemp}°C" : "--°C";
             _lblGpuTemp.Text = _gpuTemp > 0 ? $"{_gpuTemp}°C" : "--°C";
-            _lblCpuTemp.ForeColor = TempColor(_cpuTemp);
-            _lblGpuTemp.ForeColor = TempColor(_gpuTemp);
+            _lblCpuTemp.ForeColor = AppTheme.TempColor(_cpuTemp);
+            _lblGpuTemp.ForeColor = AppTheme.TempColor(_gpuTemp);
 
-            _trayIcon.Text = $"Predator Control\nCPU: {(_cpuTemp > 0 ? $"{_cpuTemp}°C" : "N/A")}  GPU: {(_gpuTemp > 0 ? $"{_gpuTemp}°C" : "N/A")}";
+            int? cpuMhz = _clockReader.GetCpuFrequencyMhz();
+            _lblCpuClock.Text = cpuMhz > 0 ? $"{cpuMhz} MHz" : "-- MHz";
+
+            bool discreteGpuReadingAllowed = IsDiscreteGpuReadingAllowed();
+            int? gpuMhz = _clockReader.GetDiscreteGpuFrequencyMhz(
+                discreteGpuReadingAllowed,
+                RequiresDiscreteGpuPowerCheck());
+            _lblGpuClock.Text = gpuMhz > 0 ? $"{gpuMhz} MHz" : "-- MHz";
+
+            UpdateFanRpmDisplay();
+            UpdateTrayTooltip(cpuMhz, gpuMhz);
+        }
+
+        private bool IsDiscreteGpuReadingAllowed()
+        {
+            if (_activeGraphicsBtn == _btnGpuIntegrated)
+                return false;
+
+            if (_wmi.SupportsGraphicsMode)
+            {
+                int graphicsMode = _wmi.GetGraphicsMode();
+                if (graphicsMode == WmiController.GraphicsModeIntegrated)
+                    return false;
+            }
+
+            return true;
+        }
+
+        private bool RequiresDiscreteGpuPowerCheck()
+        {
+            if (_activeGraphicsBtn == _btnGpuDiscrete)
+                return false;
+
+            if (_wmi.SupportsGraphicsMode)
+            {
+                int graphicsMode = _wmi.GetGraphicsMode();
+                if (graphicsMode == WmiController.GraphicsModeDiscrete)
+                    return false;
+            }
+
+            return true;
         }
 
         private void ApplyPowerRules(bool pluggedIn)
@@ -984,15 +1539,6 @@ namespace PredatorControlApp
             }
         }
 
-        private static Color TempColor(int temp) => temp switch
-        {
-            <= 0 => Color.FromArgb(107, 114, 128),
-            < 55 => Color.FromArgb(0, 200, 160),
-            < 72 => Color.FromArgb(255, 220, 50),
-            < 87 => Color.FromArgb(255, 140, 0),
-            _ => Color.FromArgb(255, 60, 60)
-        };
-
         #endregion
 
         #region UI Helpers
@@ -1019,6 +1565,14 @@ namespace PredatorControlApp
             this.Activate();
         }
 
+        private void ToggleApp()
+        {
+            if (Visible && WindowState != FormWindowState.Minimized)
+                HideApp();
+            else
+                ShowApp();
+        }
+
         private void HideApp() => this.Hide();
 
         protected override void OnFormClosing(FormClosingEventArgs e)
@@ -1032,7 +1586,11 @@ namespace PredatorControlApp
             {
                 _trayIcon.Visible = false;
                 _timer.Stop();
+                _globalHotkey?.Dispose();
+                _predatorKey?.Dispose();
                 _gameSync.Dispose();
+                _fanCurve.Dispose();
+                AppTheme.Changed -= OnThemeChanged;
                 _appMutex.Dispose();
                 base.OnFormClosing(e);
             }

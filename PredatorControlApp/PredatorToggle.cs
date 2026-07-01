@@ -9,7 +9,7 @@ namespace PredatorControlApp
     {
         private bool _checked;
         private bool _isHovered;
-        
+
         private float _knobProgress;
         private float _targetProgress;
         private readonly System.Windows.Forms.Timer _animTimer;
@@ -46,7 +46,11 @@ namespace PredatorControlApp
 
             _animTimer = new System.Windows.Forms.Timer { Interval = AnimIntervalMs };
             _animTimer.Tick += OnAnimTick;
+
+            AppTheme.Changed += OnThemeChanged;
         }
+
+        private void OnThemeChanged(object? sender, EventArgs e) => Invalidate();
 
         private void OnAnimTick(object? sender, EventArgs e)
         {
@@ -87,25 +91,20 @@ namespace PredatorControlApp
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Parent?.BackColor ?? Color.FromArgb(22, 22, 26));
+            g.Clear(Parent?.BackColor ?? AppTheme.FormBackground);
 
             float t = _knobProgress;
 
-            Color trackOff = Color.FromArgb(45, 45, 50);
-            Color trackOn = Color.FromArgb(0, 80, 65);
-            Color trackDisabled = Color.FromArgb(35, 35, 40);
-
-            Color knobOff = Color.FromArgb(80, 80, 85);
-            Color knobOn = Color.FromArgb(0, 200, 160);
-            Color knobDisabled = Color.FromArgb(55, 55, 60);
-
-            Color trackColor = Enabled ? LerpColor(trackOff, trackOn, t) : trackDisabled;
-            Color knobColor = Enabled ? LerpColor(knobOff, knobOn, t) : knobDisabled;
-
+            Color trackColor = Enabled
+                ? LerpColor(AppTheme.SwitchTrackOff, AppTheme.SwitchTrackOn, t)
+                : AppTheme.SwitchTrackDisabled;
+            Color knobColor = Enabled
+                ? LerpColor(AppTheme.SwitchKnobOff, AppTheme.SwitchKnobOn, t)
+                : AppTheme.SwitchKnobDisabled;
             Color borderColor = Enabled
-                ? (_isHovered ? Color.FromArgb(90, 90, 100) : Color.FromArgb(70, 70, 75))
-                : Color.FromArgb(50, 50, 55);
-            
+                ? (_isHovered ? AppTheme.SwitchBorderHover : AppTheme.SwitchBorder)
+                : AppTheme.SwitchBorder;
+
             using (var path = GetRoundedRectPath(new Rectangle(1, 1, Width - 3, Height - 3), Height / 2))
             {
                 using var brush = new SolidBrush(trackColor);
@@ -130,13 +129,14 @@ namespace PredatorControlApp
             if (t > 0.5f)
             {
                 int alpha = (int)((t - 0.5f) * 2f * 255f);
-                using var pen = new Pen(Color.FromArgb(Math.Clamp(alpha, 0, 255), 255, 255, 255), 1.8f);
+                Color iconColor = AppTheme.IsDark ? Color.FromArgb(Math.Clamp(alpha, 0, 255), 32, 32, 32) : Color.FromArgb(Math.Clamp(alpha, 0, 255), 255, 255, 255);
+                using var pen = new Pen(iconColor, 1.8f);
                 g.DrawLine(pen, cx, cy - iconR, cx, cy + iconR);
             }
             else
             {
                 int alpha = (int)((0.5f - t) * 2f * 200f);
-                using var pen = new Pen(Color.FromArgb(Math.Clamp(alpha, 0, 255), 200, 200, 200), 1.5f);
+                using var pen = new Pen(Color.FromArgb(Math.Clamp(alpha, 0, 255), AppTheme.SecondaryText), 1.5f);
                 g.DrawEllipse(pen, cx - iconR, cy - iconR, iconR * 2, iconR * 2);
             }
         }
@@ -155,7 +155,12 @@ namespace PredatorControlApp
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { _animTimer.Stop(); _animTimer.Dispose(); }
+            if (disposing)
+            {
+                AppTheme.Changed -= OnThemeChanged;
+                _animTimer.Stop();
+                _animTimer.Dispose();
+            }
             base.Dispose(disposing);
         }
     }
