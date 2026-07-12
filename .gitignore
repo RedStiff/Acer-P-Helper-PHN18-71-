@@ -4,7 +4,8 @@ obj/
 *.user
 *.suo
 .vs/
-
+Release_verify/
+release/
 
 # .NET
 *.dll
@@ -15,3 +16,16 @@ obj/
 # OS
 Thumbs.db
 .DS_Store
+
+# Research / probe runtime artifacts (do not ship)
+**/tools/**/*.log
+**/tools/**/nvcp_capture_*/
+**/tools/**/probe_gpu_auto_summary_*.txt
+**/tools/**/*_console_latest.txt
+**/tools/**/nvcpl_exports_dump.txt
+**/tools/**/_nvcpl_hybrid_build/
+**/tools/**/logo_probe_out/
+**/tools/**/bin/
+**/tools/**/obj/
+worker-bundle.zip
+_extracted_messagebus.cs

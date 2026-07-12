@@ -1,160 +1,202 @@
-# Predator Control
+# Acer Predator Tool
 
-A lightweight, open-source replacement for PredatorSense on Acer Predator laptops. Built with C# and WinForms, it sits in your system tray and gives you direct control over your laptop's performance, fans, display and keyboard RGB — without the bloat.
+A lightweight, open-source alternative to PredatorSense for Acer Predator laptops. Built with C# / WinForms, it runs from the system tray and talks directly to Acer’s `AcerGamingFunction` WMI interface — without the official suite’s background services.
+
+This repository is a fork/evolution of **[Paulrod20/p-helper](https://github.com/Paulrod20/p-helper)** (Predator Control), published as **[supesonly/Acer-P-Helper](https://github.com/supesonly/Acer-P-Helper)** and extended for Helios Neo **PHN18-71** and related Predator Sense v4 hardware.
 
 ---
 
-## Features
+## Disclaimer — use at your own risk
 
--  **Power Modes** — Silent, Balanced, Performance, Turbo, Eco (auto-switches with power state)
--  **Fan Control** — Auto, Max, Custom
--  **Display Refresh Rate** — Toggle between 60 Hz and your panel's max Hz
--  **Keyboard RGB** — 8 lighting modes (Static, Breathing, Neon, Wave, Shifting, Zoom, Meteor, Twinkling) with brightness and speed control
--  **Live CPU/GPU temperatures** in the title bar
--  **System tray** — full control without opening the window
--  **Remembers your settings** across reboots via the registry
--  **Runs on startup** automatically
+> **This software is experimental community tooling.** It was built with the assistance of AI tools and community reverse-engineering of Acer / NVIDIA interfaces.
+>
+> It has been tested primarily on **Acer Predator Helios Neo 18 (PHN18-71)** under Windows 11. Compatibility with other models is **not guaranteed**.
+>
+> **Use at your own risk.** The authors provide **no warranty**. Incorrect fan, power, lighting, or research-script usage can cause thermal throttling, display blanking, instability, or other hardware/software issues. Keep a recovery path (PredatorSense / BIOS / Windows Safe Mode) available.
+>
+> Scripts under `Acer Predator Tool/tools/` may call elevated WMI, scan registry, or briefly blank the screen during GPU Display Mode research. Run them only if you understand what they do.
+
+---
+
+## What works
+
+| Area | Status | Notes |
+|------|--------|--------|
+| **Power modes** | Works | Silent, Balanced, Performance, Turbo, Eco; AC/battery auto behaviour |
+| **Fan Auto / Max / Custom** | Works | Custom duty via WMI; **EC applies ~10% steps** (see below) |
+| **Advanced fan curves** | Works | Per power-mode profiles, live apply, slope/stair, Save to profile |
+| **Temps / fan RPM / clocks** | Works | Live readouts on the main panel and tray tooltip |
+| **Display refresh** | Works | Toggle 60 Hz ↔ panel max |
+| **Keyboard RGB** | Works | Effects, brightness, speed; solid + 4-zone static; live colour apply |
+| **Lid logo backlight** | Works* | Static colour, brightness, on/off (Nekro `SetGamingLEDColor` path). Breathing/Neon **not** available on this chassis via WMI |
+| **Graphics indicator** | Works* | **Read-only** Integrated / Discrete panel-owner detection (DDS result). Does **not** switch GPUs. Auto is not shown (undetectable) |
+| **Battery charge limit** | Works* | 80% health / 100% full when `BatteryControl` WMI is present |
+| **Game Sync** | Works* | Per-app profiles (power/fan/RGB) while monitoring is enabled |
+| **System tray + hotkeys** | Works | Tray menu; startup; **Predator** key and **Ctrl+Alt+P** show/hide the window |
+| **UI shell** | Works | Fixed-size borderless main window; Lighting side panel; Curves panel |
+
+\* Model-dependent — probe at runtime; UI shows limited / read-only behaviour when switching is unsupported.
+
+### Fan Custom / Advanced — EC ~10% step (PHN18-71)
+
+WMI `SetGamingFanSpeed` accepts 0–100%, but firmware maps duty to **bands of ~10%** (0, 10, …, 100). Measured RPM is flat inside a band and jumps on decade change.
+
+The app mirrors that reality:
+
+- Custom sliders step by **10%**
+- Curve points and hardware targets snap to **10%**
+- RPM hints use measured band tables (not linear `% × maxRpm`)
+
+There is **no documented 1% PWM** path for PHN18-71 through `AcerGamingFunction`.
+
+### Graphics (panel) — read-only on PHN18
+
+On PHN18 the internal panel mux is **NVIDIA Advanced Optimus / DDS**. There is **no public NVAPI** to set Display Mode, and Acer `SetGamingMiscSetting` does **not** change the panel owner (confirmed by probe scripts).
+
+The app therefore:
+
+- **Detects** whether the primary desktop is on **Intel** (Hybrid / Optimus / Automatic-idle) or **NVIDIA** (Discrete / NVIDIA GPU only)
+- **Does not** switch modes — change Display Mode in **NVIDIA Control Panel** if needed
+- Does **not** show Auto — Automatic vs Optimus cannot be distinguished via public APIs
+
+---
+
+## What does not work / limitations
+
+| Item | Status |
+|------|--------|
+| **GPU mux switching** (Integrated / Auto / Discrete) | **Not supported** — indicators only; use NVIDIA Control Panel → Display Mode |
+| **Logo Breathing / Neon effects** | Not available via WMI on PHN18 |
+| **1% fan granularity** | Not available via official WMI; raw EC write not enabled |
+| **GPU / CPU overclock** | Not implemented (PredatorSense OC tabs) |
+| **LCD override, USB charging, boot animation** | Not implemented |
+| **Battery calibration** | Not implemented |
+| **Per-key RGB** | Not supported — four-zone / effect modes only |
+| **All Predator / Nitro models** | Only validated on **PHN18-71** (Windows 11); other models may partially work or fail |
+| **Non-admin use** | Requires **Administrator** (WMI write methods) |
 
 ---
 
 ## Requirements
 
-- Acer Predator laptop (uses Acer's `AcerGamingFunction` WMI interface)
+- Acer Predator laptop exposing `root\WMI` → `AcerGamingFunction`
 - Windows 10 or 11
-- **.NET 10 Runtime** — download from [dotnet.microsoft.com](https://dotnet.microsoft.com/download/dotnet/10.0)
-- Must be run as **Administrator**
-
-> **Note:** This app has only been tested on one specific Predator model. It may or may not work on yours. Check the disclaimer at the bottom.
+- [.NET 10 Runtime](https://dotnet.microsoft.com/download/dotnet/10.0)
+- Run as **Administrator**
 
 ---
 
-## Download
+## Download / build
 
-Go to the [Releases](../../releases) page and download the latest `PredatorControlApp.exe`. Right-click → **Run as administrator**.
+**Download:** [Releases](../../releases) — run `AcerPredatorTool.exe` as administrator.
 
----
+**From source:**
 
-## Building from Source
+```text
+dotnet build "Acer Predator Tool/AcerPredatorTool.csproj" -c Release
+```
 
-1. Install [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-2. Clone this repo
-3. Open `PredatorControlApp.slnx` in Visual Studio 2022+, or run:
-   ```
-   dotnet build
-   ```
-4. The output is in `PredatorControlApp/bin/Debug/net10.0-windows/`
+Or open `AcerPredatorTool.slnx` in Visual Studio.
 
----
+Output: `Acer Predator Tool/bin/Release/net10.0-windows/AcerPredatorTool.exe`
 
-## Replacing PredatorSense — Full Setup Guide
-
-This app communicates directly with Acer's WMI driver (which is part of Windows, not PredatorSense), so you can safely disable PredatorSense and all its background services.
-
-### Step 0 — Configure Custom Fans (Do this first!)
-
-Since setting arbitrary custom fan speeds dynamically via WMI is extremely complex and model-dependent, this app commands the driver to switch to the hardware **"Custom"** fan profile, which inherits whatever custom fan speed or curve was last saved on the system.
-
-Before disabling PredatorSense:
-1. Open **PredatorSense**.
-2. Go to **Fan Control** and set your **Custom** fan speeds or curves exactly as you want them.
-3. Apply the settings.
-4. Close PredatorSense. 
-
-Once set, our app's **Custom** fan setting will use this saved curve even after PredatorSense is completely disabled.
-
-### Step 1 — Disable PredatorSense Services
-
-Open **Services** (`Win + R` → type `services.msc` → Enter) and set the following services to **Disabled**:
-
-| Service Name | What it does |
-|---|---|
-| `Acer Gaming Service` | PredatorSense background daemon |
-| `Acer Quick Access Service` | Hotkey management (Fn keys) |
-| `AcerService` | Core Acer system service |
-| `Acer Power Button Service` | Hardware button handling |
-
-For each service:
-1. Double-click it
-2. Set **Startup type** to `Disabled`
-3. Click **Stop** if it's running
-4. Click **OK**
-
-> **Note:** The WMI driver that actually controls hardware (power modes, fans, RGB) is separate from these services and remains active — that's what this app uses.
-
-### Step 2 — Disable PredatorSense from Startup
-
-1. Press `Ctrl + Shift + Esc` to open Task Manager
-2. Click the **Startup apps** tab
-3. Find **PredatorSense** and any other Acer apps
-4. Right-click → **Disable**
-
-### Step 3 — Remove PredatorSense from Startup Registry (optional, thorough)
-
-1. Press `Win + R`, type `regedit`, press Enter
-2. Navigate to:
-   ```
-   HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\Run
-   ```
-3. Delete any entries related to `PredatorSense`, `AcerGaming`, or `Acer`
-4. Also check:
-   ```
-   HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Run
-   ```
-
-### Step 4 — Make Predator Control Run on Startup Instead
-
-This app registers itself on startup automatically the first time it runs. It launches with the `-hidden` flag so it starts directly in the system tray without showing the window.
-
-To verify it's registered:
-1. Open `regedit`
-2. Navigate to:
-   ```
-   HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\Run
-   ```
-3. You should see a `PredatorControl` entry pointing to the app's `.exe`
-
-If it's not there, just run the app once as Administrator and it will self-register.
-
-### Step 5 — Uninstall PredatorSense (optional)
-
-If you want to fully remove it:
-1. Open **Settings** → **Apps** → **Installed apps**
-2. Search for **PredatorSense**
-3. Click the three dots → **Uninstall**
-
->  Do this **after** confirming Predator Control works correctly for you. Keep PredatorSense installed as a fallback until you're happy.
+Published package layout (example): `release/AcerPredatorTool-1.0.0/`
 
 ---
 
-## How It Works
+## Open / hide the window (hotkeys)
 
-The app talks directly to the `AcerGamingFunction` WMI class in the `root\WMI` namespace — the same low-level interface PredatorSense uses under the hood. No Acer background services are required.
+While the app is running in the tray:
+
+| Input | Action |
+|-------|--------|
+| **Predator** key (dedicated laptop key) | Show or hide the main window |
+| **Ctrl+Alt+P** | Same (global hotkey) |
+| Tray icon double-click | Show the window |
+
+If another app already owns **Ctrl+Alt+P**, the global hotkey may fail to register; the **Predator** key still works when Acer’s conflicting hotkey services are disabled.
+
+---
+
+## Replacing PredatorSense
+
+The app uses the firmware WMI provider (part of the platform), not PredatorSense services. You can disable Acer gaming services after confirming this tool works on your machine. Keep PredatorSense installed until you are satisfied.
+
+**Do not disable the WMI/ACPI stack** — only PredatorSense userland services if you choose to.
+
+Startup: the app registers `AcerPredatorTool` under `HKCU\...\Run` on first launch (`-hidden` for tray start).
 
 ---
 
-## Disclaimer
+## Research tools (`Acer Predator Tool/tools/`)
 
->  **This app was built with the assistance of AI tools.**
->
-> It has been tested on **one system only** (an Acer Predator (Helios Neo 16) running Windows 11). Compatibility with other Predator models, Windows versions, or hardware configurations is not guaranteed.
->
-> **Use at your own risk. Any issues, damage, or unexpected behavior that occurs as a result of using this app are solely your responsibility.** The author provides no warranty, support, or guarantee of any kind.
->
-> If something breaks — reflash your BIOS, reinstall PredatorSense, or restore from a backup. That's on you.
+Helpers for reverse-engineering and verification. **Not part of the app UI.** Many require Administrator. Some `-Apply` / NVCP flows can blank the screen briefly.
+
+**Use at your own risk.** Prefer read-only scripts first. Close `AcerPredatorTool` / games before SET / mux tests.
+
+### Fan / EC (read-only)
+
+| Script | Purpose |
+|--------|---------|
+| `ec_wmi_fan_snapshot.ps1` | WMI fan % / RPM / temps snapshot |
+| `ec_dump_readonly.ps1` | Read-only EC memory dump helper |
+| `ec_diff_dumps.ps1` | Diff two EC dumps |
+| `README_EC_RESEARCH.md` | Fan-step / EC notes |
+
+### GPU / DDS mux research
+
+| Script / entry | Purpose |
+|----------------|---------|
+| `probe_gpu_auto.cmd` | Full suite: fingerprint, NV registry, NvCpl Hybrid GET, Acer baseline, SysInfo, WMI DryRun |
+| `probe_gpu_auto_apply.cmd` | Same + focused Acer misc SET (already: **no mux HIT** on PHN18) |
+| `probe_gpu_nvcp_capture.cmd` | Interactive BEFORE/AFTER capture while **you** change NVCP Display Mode |
+| `INSTRUCTIONS_GPU_NVCP_CAPTURE.md` | Step-by-step for NVCP capture |
+| `README_GPU_RESEARCH.md` | GPU research summary |
+| `probe_gpu_fingerprint.ps1` | Panel owner + nvidia-smi (no admin) |
+| `probe_gpu_nv_registry.ps1` | NVIDIA registry dump |
+| `probe_gpu_nvcpl_hybrid.ps1` | `GetHybridMode` / Muxd probe (no public Set) |
+| `probe_gpu_baseline.ps1` | Acer WMI inventory |
+| `probe_gpu_sysinfo_scan.ps1` | SysInfo / ProfileSetting GET |
+| `probe_gpu_wmi_bruteforce.ps1` | Misc candidate DryRun / `-Apply` |
+| `_gpu_common.ps1` | Shared helpers for GPU probes |
+
+### Lighting / logo probes
+
+| Script | Purpose |
+|--------|---------|
+| `probe_logo_ask.ps1` | Interactive lid-logo colour probes |
+| `probe_logo_nekro_confirm.ps1` | Nekro `SetGamingLEDColor` confirm path |
+| `probe_logo_effects_ask.ps1` | Effect probes (Breathing/Neon — not effective on PHN18) |
+| `verify_selfsufficiency.ps1` | Lighting self-check helper |
 
 ---
-<img width="388" height="380" alt="image" src="https://github.com/user-attachments/assets/5a2d6423-8ab9-4a23-aa51-f14eb2a215d9" />
-<img width="484" height="137" alt="image" src="https://github.com/user-attachments/assets/f02178d9-92e5-4c1d-be54-587b0bff4b95" />
+
+## Credits & materials
+
+### Upstream / fork
+
+- **[supesonly/Acer-P-Helper](https://github.com/supesonly/Acer-P-Helper)** — Acer Predator Tool / Predator Control (this project’s GitHub home)
+- **[Paulrod20/p-helper](https://github.com/Paulrod20/p-helper)** — original Windows Predator Control app this lineage started from
+
+### WMI / fan / Predator Sense reverse-engineering references
+
+- **[linux `acer-wmi`](https://github.com/torvalds/linux/blob/master/drivers/platform/x86/acer-wmi.c)** — upstream kernel documentation of Predator v4 sensors, fan behaviour, and `SetGamingFanSpeed` / `GetGamingFanSpeed`
+- **[0x7375646F/Linuwu-Sense](https://github.com/0x7375646F/Linuwu-Sense)** — community Predator/Nitro WMI module (fan encoding, custom mode sequences)
+- **[JafarAkhondali/acer-predator-turbo-and-rgb-keyboard-linux-module](https://github.com/JafarAkhondali/acer-predator-turbo-and-rgb-keyboard-linux-module)** — earlier reverse-engineering of Predator Sense WMI/RGB/turbo paths
+- **[rafradek/Acer-Predator-Scripts](https://github.com/rafradek/Acer-Predator-Scripts)** — lightweight PredatorSense-oriented scripting / debloat approach
+
+Official Acer PredatorSense / IntelliSense remain the proprietary reference for behaviour; this project is independent and unsupported by Acer.
+
+NVIDIA Advanced Optimus / DDS Display Mode is controlled by NVIDIA Control Panel; NVIDIA has stated there is no public NVAPI for that setting.
 
 ---
-##  Strictly Not for Sale
 
-This is a **free, open-source utility** created for the community. 
-* **It is strictly prohibited to sell this software**, bundle it with commercial products, or use it for any commercial sales/marketing.
-* If you paid for this software, you have been scammed. Please report the seller and demand a refund.
-* Unauthorized commercial distribution or sale of this software will lead to immediate take-down requests and legal consequences.
+## Strictly not for sale
+
+Free, open-source community software. **Do not sell** this software or bundle it commercially. If you paid for it, you were scammed — report the seller.
 
 ---
+
 ## License
 
-[MIT](LICENSE) — do whatever you want with it.
+[MIT](LICENSE) — same spirit as the upstream p-helper project; respect licenses of linked third-party materials when reusing their code.
