@@ -1669,11 +1669,8 @@ namespace PredatorControlApp
         {
             try
             {
-                using var key = Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true);
-                string appPath = $"\"{Application.ExecutablePath}\" -hidden";
-                key?.SetValue(AppInfo.StartupRegistryValue, appPath);
-                // Migrate away from the old Predator Control startup name.
-                try { key?.DeleteValue("PredatorControl", throwOnMissingValue: false); } catch { }
+                // requireAdministrator + HKCU\Run cannot autostart (UAC suppressed at logon).
+                StartupRegistrar.RegisterHiddenAtLogon();
             }
             catch { }
         }

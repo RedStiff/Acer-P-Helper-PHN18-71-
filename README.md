@@ -124,7 +124,7 @@ The app uses the firmware WMI provider (part of the platform), not PredatorSense
 
 **Do not disable the WMI/ACPI stack** — only PredatorSense userland services if you choose to.
 
-Startup: the app registers `AcerPredatorTool` under `HKCU\...\Run` on first launch (`-hidden` for tray start).
+Startup: because the app runs elevated (`requireAdministrator`), it cannot use `HKCU\...\Run` (Windows suppresses UAC at logon). On launch it registers a logon Scheduled Task named `AcerPredatorTool` with highest privileges and `-hidden` (tray). Legacy Run-key entries are removed.
 
 ---
 
