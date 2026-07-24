@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>PredatorControlApp.Tools</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\GpuStatus.cs" Link="GpuStatus.cs" />
+    <Compile Include="..\..\DdsControl.cs" Link="DdsControl.cs" />
+    <Compile Include="..\..\DdsNativeHost.cs" Link="DdsNativeHost.cs" />
+    <Compile Include="..\..\NvidiaAppCdpHost.cs" Link="NvidiaAppCdpHost.cs" />
+    <!-- GraphicsMuxDetector.Stub.cs is picked up from project dir -->
+    <Content Include="..\inject_dds\dds_native_helper.dll" Link="inject_dds\dds_native_helper.dll" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\inject_dds\hook_cef_port.dll" Link="inject_dds\hook_cef_port.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\inject_dds\hook_cef_port.dll')" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.1" />
+  </ItemGroup>
+</Project>

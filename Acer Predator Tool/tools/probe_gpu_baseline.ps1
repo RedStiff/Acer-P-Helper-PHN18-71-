@@ -23,7 +23,7 @@ param(
 
 . "$PSScriptRoot\_gpu_common.ps1"
 
-if (-not (Ensure-Admin)) { exit 1 }
+if (-not (Confirm-GpuAdmin)) { exit 1 }
 
 $log = New-GpuLog 'probe_gpu_baseline'
 Write-GpuLog $log '=== GPU baseline (read-only) ===' Green

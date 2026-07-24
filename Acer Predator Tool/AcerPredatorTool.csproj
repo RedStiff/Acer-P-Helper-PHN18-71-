@@ -12,14 +12,16 @@
     <Product>Acer Predator Tool</Product>
     <AssemblyName>AcerPredatorTool</AssemblyName>
     <RootNamespace>PredatorControlApp</RootNamespace>
-    <Version>1.0.0</Version>
-    <FileVersion>1.0.0</FileVersion>
-    <InformationalVersion>1.0.0</InformationalVersion>
+    <Version>1.0.1.1</Version>
+    <AssemblyVersion>1.0.1.1</AssemblyVersion>
+    <FileVersion>1.0.1.1</FileVersion>
+    <InformationalVersion>1.0.1.1</InformationalVersion>
     <Description>Lightweight PredatorSense alternative for Acer Predator laptops (PHN18-71)</Description>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="System.Management" Version="10.0.1" />
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.1" />
   </ItemGroup>
 
   <ItemGroup>
@@ -30,6 +32,11 @@
 
   <ItemGroup>
     <Content Include="appicon.ico" />
+    <!-- Sidecar for dev; also embedded so single-file / plain publish works without launcher.exe -->
+    <Content Include="tools\inject_dds\hook_cef_port.dll" Link="inject_dds\hook_cef_port.dll" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="tools\inject_dds\hook_cef_port.dll" LogicalName="hook_cef_port.dll" />
+    <Content Include="tools\inject_dds\dds_native_helper.dll" Link="inject_dds\dds_native_helper.dll" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="tools\inject_dds\dds_native_helper.dll" LogicalName="dds_native_helper.dll" />
   </ItemGroup>
 
   <ItemGroup>

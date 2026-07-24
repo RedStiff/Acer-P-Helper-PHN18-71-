@@ -153,8 +153,12 @@ namespace PredatorControlApp
         private PredatorButton _btnQuiet = null!, _btnBalanced = null!, _btnPerform = null!,
                                _btnTurbo = null!, _btnEco = null!;
 
-        private PredatorButton? _btnGpuIntegrated, _btnGpuDiscrete;
+        private PredatorButton? _btnGpuIgpuOnly, _btnGpuHybrid;
+        private PredatorButton? _btnGpuOptimus, _btnGpuAuto, _btnGpuNvidia;
         private ToolTip? _graphicsToolTip;
+        private readonly GpuControlService _gpu = new();
+        private bool _gpuSwitchBusy;
+        private PredatorButton? _activeGpuDeviceBtn, _activeGpuDisplayBtn;
 
         private PredatorButton _btnAutoFan = null!, _btnMaxFan = null!, _btnCustomFan = null!, _btnAdvancedFan = null!;
         private PredatorSlider _cpuFanSlider = null!, _gpuFanSlider = null!;
@@ -171,7 +175,7 @@ namespace PredatorControlApp
         private int _currentRgbSpeed = 50;
         private LogoLightingSettings _logoSettings = new();
         
-        private PredatorButton? _activePowerBtn, _activeGraphicsBtn, _activeFanBtn, _activeDisplayBtn;
+        private PredatorButton? _activePowerBtn, _activeFanBtn, _activeDisplayBtn;
         private bool _isUpdatingBattery;
 
         private PredatorSwitch _switchBatteryLimit = null!;
@@ -191,7 +195,8 @@ namespace PredatorControlApp
 
         private ToolStripMenuItem _trayPowerQuiet = null!, _trayPowerBal = null!, _trayPowerPerf = null!,
                                   _trayPowerTurbo = null!, _trayPowerEco = null!;
-        private ToolStripMenuItem? _trayGraphicsIntegrated, _trayGraphicsDiscrete;
+        private ToolStripMenuItem? _trayGpuIgpuOnly, _trayGpuHybrid;
+        private ToolStripMenuItem? _trayGpuOptimus, _trayGpuAuto, _trayGpuNvidia;
         private ToolStripMenuItem _trayFanAuto = null!, _trayFanMax = null!, _trayFanCustom = null!, _trayFanAdvanced = null!;
         private ToolStripMenuItem _trayDisplay60 = null!, _trayDisplayMax = null!;
         private ToolStripMenuItem _trayBatteryLimit80 = null!, _trayBatteryLimit100 = null!;
@@ -406,7 +411,7 @@ namespace PredatorControlApp
             catch { _trayIcon.Icon = SystemIcons.Application; }
 
             _trayIcon.ContextMenuStrip = _trayMenu;
-            _trayIcon.Text = AppInfo.DisplayName;
+            _trayIcon.Text = AppInfo.DisplayNameWithVersion;
             _trayIcon.Visible = true;
             _trayIcon.DoubleClick += (s, e) => ShowApp();
             UpdateTrayHotkeyHint();
@@ -452,11 +457,21 @@ namespace PredatorControlApp
             ToolStripMenuItem? graphicsMenu = null;
             if (_wmi.SupportsGraphicsMode)
             {
-                graphicsMenu = new ToolStripMenuItem("  Graphics indicator");
-                _trayGraphicsIntegrated = new ToolStripMenuItem("Integrated / Hybrid") { Enabled = false };
-                _trayGraphicsDiscrete = new ToolStripMenuItem("Discrete") { Enabled = false };
-                graphicsMenu.DropDownItems.AddRange([_trayGraphicsIntegrated, _trayGraphicsDiscrete]);
-                graphicsMenu.DropDownOpening += (_, _) => RefreshGraphicsIndicators();
+                graphicsMenu = new ToolStripMenuItem("  Graphics");
+                var deviceMenu = new ToolStripMenuItem("GPU Device");
+                _trayGpuIgpuOnly = new ToolStripMenuItem("iGPU Only", null, (_, _) => _ = ApplyGpuDeviceAsync(GpuDeviceState.IgpuOnly));
+                _trayGpuHybrid = new ToolStripMenuItem("Hybrid", null, (_, _) => _ = ApplyGpuDeviceAsync(GpuDeviceState.Hybrid));
+                deviceMenu.DropDownItems.AddRange([_trayGpuIgpuOnly, _trayGpuHybrid]);
+
+                var ddsMenu = new ToolStripMenuItem("Display Mode");
+                _trayGpuOptimus = new ToolStripMenuItem("Optimus", null, (_, _) => _ = ApplyGpuDisplayModeAsync(GpuDisplayMode.Optimus));
+                _trayGpuAuto = new ToolStripMenuItem("Auto", null, (_, _) => _ = ApplyGpuDisplayModeAsync(GpuDisplayMode.Auto));
+                _trayGpuNvidia = new ToolStripMenuItem("NVIDIA", null, (_, _) => _ = ApplyGpuDisplayModeAsync(GpuDisplayMode.Nvidia));
+                ddsMenu.DropDownItems.AddRange([_trayGpuOptimus, _trayGpuAuto, _trayGpuNvidia]);
+
+                graphicsMenu.DropDownItems.Add(deviceMenu);
+                graphicsMenu.DropDownItems.Add(ddsMenu);
+                graphicsMenu.DropDownOpening += (_, _) => RefreshGpuUi();
             }
 
             var fanMenu = new ToolStripMenuItem("  Fan Mode");
@@ -512,7 +527,7 @@ namespace PredatorControlApp
 
             _formW = S(UiSettings.FixedMainPanelWidth);
             // Taskbar / Start / Alt+Tab use Form.Text — must be set even for borderless UI.
-            this.Text = AppInfo.DisplayName;
+            this.Text = AppInfo.DisplayNameWithVersion;
             this.ShowIcon = true;
             this.ShowInTaskbar = true;
             this.FormBorderStyle = FormBorderStyle.None;
@@ -638,23 +653,42 @@ namespace PredatorControlApp
             y += btnH + secAfterBtn;
             if (_wmi.SupportsGraphicsMode)
             {
-                MakeSectionHeader("GRAPHICS INDICATOR", pad, y);
-
+                MakeSectionHeader("GPU DEVICE", pad, y);
                 y += secAfterHeader;
-                int gpuBtnW = (contentW - gap) / 2;
-                _btnGpuIntegrated = MakeButton("Integrated", pad, y, gpuBtnW, btnH);
-                _btnGpuDiscrete = MakeButton("Discrete", pad + gpuBtnW + gap, y, gpuBtnW, btnH);
+                int gpuDevW = (contentW - gap) / 2;
+                _btnGpuIgpuOnly = MakeButton("iGPU Only", pad, y, gpuDevW, btnH);
+                _btnGpuHybrid = MakeButton("Hybrid", pad + gpuDevW + gap, y, gpuDevW, btnH);
+                _btnGpuIgpuOnly.Click += (_, _) => _ = ApplyGpuDeviceAsync(GpuDeviceState.IgpuOnly);
+                _btnGpuHybrid.Click += (_, _) => _ = ApplyGpuDeviceAsync(GpuDeviceState.Hybrid);
 
-                ConfigureGraphicsIndicator(_btnGpuIntegrated);
-                ConfigureGraphicsIndicator(_btnGpuDiscrete);
+                y += btnH + secAfterBtn;
+                MakeSectionHeader("DISPLAY MODE", pad, y);
+                y += secAfterHeader;
+                int gpuDdsW = (contentW - 2 * gap) / 3;
+                _btnGpuOptimus = MakeButton("Optimus", pad, y, gpuDdsW, btnH);
+                _btnGpuAuto = MakeButton("Auto", pad + gpuDdsW + gap, y, gpuDdsW, btnH);
+                _btnGpuNvidia = MakeButton("NVIDIA", pad + (gpuDdsW + gap) * 2, y, gpuDdsW, btnH);
+                _btnGpuOptimus.Click += (_, _) => _ = ApplyGpuDisplayModeAsync(GpuDisplayMode.Optimus);
+                _btnGpuAuto.Click += (_, _) => _ = ApplyGpuDisplayModeAsync(GpuDisplayMode.Auto);
+                _btnGpuNvidia.Click += (_, _) => _ = ApplyGpuDisplayModeAsync(GpuDisplayMode.Nvidia);
 
-                _graphicsToolTip = new ToolTip { ShowAlways = true, AutoPopDelay = 12000 };
-                _graphicsToolTip.SetToolTip(_btnGpuIntegrated,
-                    "Panel owned by Intel (Optimus / Hybrid).\nRead-only indicator — switch Display Mode in NVIDIA Control Panel.");
-                _graphicsToolTip.SetToolTip(_btnGpuDiscrete,
-                    "Panel owned by NVIDIA (NVIDIA GPU only / DDS discrete).\nRead-only indicator — switch Display Mode in NVIDIA Control Panel.");
+                _graphicsToolTip = new ToolTip { ShowAlways = true, AutoPopDelay = 14000, InitialDelay = 400 };
+                _graphicsToolTip.SetToolTip(_btnGpuIgpuOnly,
+                    "iGPU Only — disables the NVIDIA GPU in Windows (PreySense Endurance).\n" +
+                    "Saves power; games/CUDA will not see the dGPU.\nScreen may blank briefly.");
+                _graphicsToolTip.SetToolTip(_btnGpuHybrid,
+                    "Hybrid — re-enables the NVIDIA GPU (PreySense Standard).\n" +
+                    "dGPU available for apps; panel mode is set under DISPLAY MODE.");
+                _graphicsToolTip.SetToolTip(_btnGpuOptimus,
+                    "Optimus — internal panel on Intel; dGPU used per-app (forced, not Automatic).");
+                _graphicsToolTip.SetToolTip(_btnGpuAuto,
+                    "Auto — NVIDIA Automatic Display Mode (DDS allow-list).\n" +
+                    "Idle panel often looks like Optimus; apps may switch to dGPU.");
+                _graphicsToolTip.SetToolTip(_btnGpuNvidia,
+                    "NVIDIA — internal panel on dGPU (Ultimate / NVIDIA GPU only).\n" +
+                    "Higher power draw; screen may blank during switch.");
 
-                RefreshGraphicsIndicators();
+                RefreshGpuUi();
                 y += btnH + secAfterBtn;
             }
 
@@ -1164,45 +1198,133 @@ namespace PredatorControlApp
             CheckTrayItem(trayItem, _trayPowerQuiet, _trayPowerBal, _trayPowerPerf, _trayPowerTurbo, _trayPowerEco);
         }
 
-        private static void ConfigureGraphicsIndicator(PredatorButton btn)
+        private void RefreshGpuUi()
         {
-            btn.Cursor = Cursors.Default;
-            btn.TabStop = false;
-            btn.HoverEnabled = false;
-        }
-
-        /// <summary>
-        /// Highlights Integrated or Discrete from live panel-owner detection.
-        /// </summary>
-        private void RefreshGraphicsIndicators()
-        {
-            if (_btnGpuIntegrated == null || _btnGpuDiscrete == null)
+            if (_btnGpuIgpuOnly == null || _btnGpuHybrid == null ||
+                _btnGpuOptimus == null || _btnGpuAuto == null || _btnGpuNvidia == null)
                 return;
 
-            int mode = _wmi.GetGraphicsMode();
-            PredatorButton? active = mode switch
+            GpuStatus status;
+            try { status = _gpu.GetStatus(); }
+            catch { return; }
+
+            PredatorButton? deviceBtn = status.DeviceState switch
             {
-                WmiController.GraphicsModeIntegrated => _btnGpuIntegrated,
-                WmiController.GraphicsModeDiscrete => _btnGpuDiscrete,
+                GpuDeviceState.IgpuOnly => _btnGpuIgpuOnly,
+                GpuDeviceState.Hybrid => _btnGpuHybrid,
                 _ => null
             };
+            SetGpuHighlight(deviceBtn, ref _activeGpuDeviceBtn);
 
-            if (!ReferenceEquals(_activeGraphicsBtn, active))
+            PredatorButton? displayBtn = status.DisplayMode switch
             {
-                if (active != null)
-                    HighlightBtn(active, ref _activeGraphicsBtn);
-                else if (_activeGraphicsBtn != null)
-                {
-                    _activeGraphicsBtn.IsActive = false;
-                    _activeGraphicsBtn = null;
-                }
-            }
+                GpuDisplayMode.Optimus => _btnGpuOptimus,
+                GpuDisplayMode.Auto => _btnGpuAuto,
+                GpuDisplayMode.Nvidia => _btnGpuNvidia,
+                _ => null
+            };
+            SetGpuHighlight(displayBtn, ref _activeGpuDisplayBtn);
 
-            if (_trayGraphicsIntegrated == null || _trayGraphicsDiscrete == null)
+            bool hybrid = status.DeviceState == GpuDeviceState.Hybrid;
+            bool enableUi = !_gpuSwitchBusy;
+            _btnGpuIgpuOnly.Enabled = enableUi;
+            _btnGpuHybrid.Enabled = enableUi;
+            _btnGpuOptimus.Enabled = enableUi && hybrid;
+            _btnGpuAuto.Enabled = enableUi && hybrid;
+            _btnGpuNvidia.Enabled = enableUi && hybrid;
+
+            if (_trayGpuIgpuOnly != null)
+            {
+                _trayGpuIgpuOnly.Checked = status.DeviceState == GpuDeviceState.IgpuOnly;
+                _trayGpuHybrid!.Checked = status.DeviceState == GpuDeviceState.Hybrid;
+                _trayGpuOptimus!.Checked = status.DisplayMode == GpuDisplayMode.Optimus;
+                _trayGpuAuto!.Checked = status.DisplayMode == GpuDisplayMode.Auto;
+                _trayGpuNvidia!.Checked = status.DisplayMode == GpuDisplayMode.Nvidia;
+
+                _trayGpuIgpuOnly.Enabled = enableUi;
+                _trayGpuHybrid.Enabled = enableUi;
+                _trayGpuOptimus.Enabled = enableUi && hybrid;
+                _trayGpuAuto.Enabled = enableUi && hybrid;
+                _trayGpuNvidia.Enabled = enableUi && hybrid;
+            }
+        }
+
+        private void SetGpuHighlight(PredatorButton? active, ref PredatorButton? tracker)
+        {
+            if (ReferenceEquals(tracker, active))
+                return;
+            if (active != null)
+                HighlightBtn(active, ref tracker);
+            else if (tracker != null)
+            {
+                tracker.IsActive = false;
+                tracker = null;
+            }
+        }
+
+        private async Task ApplyGpuDeviceAsync(GpuDeviceState target)
+        {
+            if (_gpuSwitchBusy || _gpu.IsBusy)
                 return;
 
-            _trayGraphicsIntegrated.Checked = mode == WmiController.GraphicsModeIntegrated;
-            _trayGraphicsDiscrete.Checked = mode == WmiController.GraphicsModeDiscrete;
+            if (target == GpuDeviceState.IgpuOnly)
+            {
+                var confirm = MessageBox.Show(
+                    this,
+                    "Disable the NVIDIA GPU in Windows?\n\n" +
+                    "Games and CUDA will not see the dGPU until you switch back to Hybrid.\n" +
+                    "The screen may blank briefly.",
+                    "iGPU Only",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning);
+                if (confirm != DialogResult.Yes)
+                    return;
+            }
+
+            await RunGpuSwitchAsync(() => _gpu.ApplyDeviceAsync(target)).ConfigureAwait(true);
+        }
+
+        private async Task ApplyGpuDisplayModeAsync(GpuDisplayMode target)
+        {
+            if (_gpuSwitchBusy || _gpu.IsBusy)
+                return;
+
+            await RunGpuSwitchAsync(() => _gpu.ApplyDisplayModeAsync(target)).ConfigureAwait(true);
+        }
+
+        private async Task RunGpuSwitchAsync(Func<Task<GpuControlService.ApplyResult>> action)
+        {
+            _gpuSwitchBusy = true;
+            RefreshGpuUi();
+            try
+            {
+                var result = await action().ConfigureAwait(true);
+                GraphicsMuxDetector.InvalidateCache();
+                RefreshGpuUi();
+                if (!result.Ok)
+                {
+                    MessageBox.Show(
+                        this,
+                        result.Detail,
+                        "GPU switch failed",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    this,
+                    ex.Message,
+                    "GPU switch error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+            finally
+            {
+                _gpuSwitchBusy = false;
+                RefreshGpuUi();
+            }
         }
 
         private void ApplyFanMode(byte mode, PredatorButton btn)
@@ -1611,8 +1733,8 @@ namespace PredatorControlApp
                 };
                 ApplyPowerMode(powerMode, powerBtn);
 
-                if (_wmi.SupportsGraphicsMode && _btnGpuIntegrated != null)
-                    RefreshGraphicsIndicators();
+                if (_wmi.SupportsGraphicsMode && _btnGpuIgpuOnly != null)
+                    RefreshGpuUi();
 
                 var (fanMode, fanBtn) = savedFan switch
                 {
@@ -1725,8 +1847,8 @@ namespace PredatorControlApp
                 requireGpuPowerCheck);
             _lblGpuClock.Text = gpuMhz > 0 ? $"{gpuMhz} MHz" : "-- MHz";
 
-            if (_wmi.SupportsGraphicsMode)
-                RefreshGraphicsIndicators();
+            if (_wmi.SupportsGraphicsMode && !_gpuSwitchBusy)
+                RefreshGpuUi();
 
             UpdateFanRpmDisplay();
             UpdateTrayTooltip(cpuMhz, gpuMhz);

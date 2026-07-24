@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
   Master automatic GPU-switch research suite (no app integration).
@@ -31,7 +31,7 @@ param(
 
 . "$PSScriptRoot\_gpu_common.ps1"
 
-if (-not (Ensure-Admin)) { exit 1 }
+if (-not (Confirm-GpuAdmin)) { exit 1 }
 
 # Close app so it does not fight WMI / lighting during probes.
 Get-Process -Name AcerPredatorTool -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue

@@ -78,24 +78,47 @@ namespace PredatorControlApp
             }
         }
 
-        private bool SendLedCommand(byte[] payload)
+        /// <summary>
+        /// MOF UInt8Array methods (SetGamingLED, SetGamingKBBacklight). Passing ulong fails under CIM.
+        /// </summary>
+        private (bool success, ulong output) SendByteArrayCommand(string method, byte[] input)
         {
             try
             {
                 var obj = GetWmiObject();
-                if (obj == null) return false;
+                if (obj == null) return (false, 0);
 
-                using var inParams = obj.GetMethodParameters("SetGamingKBBacklight");
-                inParams["gmInput"] = payload;
-                using var outParams = obj.InvokeMethod("SetGamingKBBacklight", inParams, null);
-                ulong result = Convert.ToUInt64(outParams["gmOutput"]);
-                return (result & 0xFF) == 0;
+                using var inParams = obj.GetMethodParameters(method);
+                inParams["gmInput"] = input;
+                using var outParams = obj.InvokeMethod(method, inParams, null);
+                object raw = outParams["gmOutput"];
+                ulong result = raw switch
+                {
+                    byte[] bytes when bytes.Length >= 8 => BitConverter.ToUInt64(bytes, 0),
+                    byte[] bytes when bytes.Length > 0 => bytes[0],
+                    _ => Convert.ToUInt64(raw)
+                };
+                return ((result & 0xFF) == 0, result);
             }
             catch
             {
                 InvalidateCache();
-                return false;
+                return (false, 0);
             }
+        }
+
+        private static byte[] PackKeyboardAllZonesLed()
+        {
+            // MAX=16; value KeyboardAllZones = 8 | (0x0F << 40) little-endian in first 8 bytes.
+            byte[] payload = new byte[16];
+            BitConverter.GetBytes(KeyboardAllZones).CopyTo(payload, 0);
+            return payload;
+        }
+
+        private bool SendLedCommand(byte[] payload)
+        {
+            var (ok, _) = SendByteArrayCommand("SetGamingKBBacklight", payload);
+            return ok;
         }
 
         private int GetSensorReading(ulong sensorId)
@@ -123,13 +146,13 @@ namespace PredatorControlApp
 
         public void ProbeGraphicsModeSupport()
         {
-            // PHN18 always shows panel-owner indicators (NVIDIA DDS). Switching is not supported.
+            // PHN18: GPU device + DDS display mode via GpuControlService (not Acer WMI).
             SupportsGraphicsMode = true;
         }
 
         /// <summary>
-        /// Panel owner from EnumDisplayDevices / nvidia-smi.
-        /// Returns Integrated or Discrete; Auto is not distinguishable while idle on iGPU.
+        /// Panel owner from EnumDisplayDevices.
+        /// Returns Integrated or Discrete; Auto vs Optimus needs ACE (see GpuControlService).
         /// </summary>
         public int GetGraphicsMode()
         {
@@ -138,7 +161,7 @@ namespace PredatorControlApp
             return mode ?? -1;
         }
 
-        /// <summary>No-op — Acer WMI / public NVAPI cannot set DDS Display Mode on PHN18.</summary>
+        /// <summary>Unused — GPU SET goes through GpuControlService.</summary>
         public bool SetGraphicsMode(byte mode)
         {
             _ = mode;
@@ -291,8 +314,8 @@ namespace PredatorControlApp
         }
 
         /// <summary>
-        /// Static on a cold EC (after crash / lost EC profile): mirrors AcerLightingService
-        /// startup — two full rounds of LED register + KB commit + per-zone sync.
+        /// Static on a cold EC (after crash / lost EC profile): two full WMI rounds only.
+        /// No AcerLightingService / OpenRGB — same ACPI path as Linuwu-Sense on Linux.
         /// Short BeginLightingUpdate (0x07) is enough for effect modes but not static.
         /// </summary>
         private void ApplySolidStaticColor(byte r, byte g, byte b)
@@ -304,7 +327,7 @@ namespace PredatorControlApp
         }
 
         /// <summary>
-        /// Per-zone static: same AcerLightingService two-round EC registration as solid,
+        /// Per-zone static: same two-round WMI EC registration as solid,
         /// with individual zone colors via SetGamingRgbKb.
         /// </summary>
         private void PushStaticZoneColors(byte[] r, byte[] g, byte[] b)
@@ -344,22 +367,23 @@ namespace PredatorControlApp
             SendCommand("GetGamingLEDBehavior", 0);
             SendCommand("SetGamingLEDBehavior", KeyboardLedBehaviorWake);
             Thread.Sleep(50);
-            SendCommand("SetGamingLED", KeyboardAllZones);
+            SendByteArrayCommand("SetGamingLED", PackKeyboardAllZonesLed());
             SendCommand("SetGamingLEDBehavior", KeyboardAllZones);
             Thread.Sleep(20);
         }
 
         /// <summary>
-        /// AcerLightingService static EC registration (WMI trace):
-        /// GetGamingLED x2, GetGamingLEDBehavior,
-        /// then TWO rounds of SetGamingLED → SetGamingLEDColor → SetGamingLEDBehavior →
+        /// Cold-static unlock via AcerGamingFunction WMI only (no Acer userland lighting).
+        /// Probe + two rounds: SetGamingLED → SetGamingLEDColor → SetGamingLEDBehavior →
         /// SetGamingKBBacklight (mode 0, [8]=3,[9]=1) → SetGamingRgbKb x4.
+        /// Linuwu uses the same KB backlight buffer; GetGamingKBBacklight(1) mirrors Linux get.
         /// </summary>
         private void RunStaticEcRecovery(Action writeZones)
         {
             SendCommand("GetGamingLED", 0);
             SendCommand("GetGamingLED", 0);
             SendCommand("GetGamingLEDBehavior", 0);
+            SendCommand("GetGamingKBBacklight", 1);
 
             ApplyStaticEcRound(writeZones);
             Thread.Sleep(50);
@@ -368,13 +392,15 @@ namespace PredatorControlApp
 
         private void ApplyStaticEcRound(Action writeZones)
         {
-            SendCommand("SetGamingLED", KeyboardAllZones);
+            SendByteArrayCommand("SetGamingLED", PackKeyboardAllZonesLed());
             SendZoneColor(0x0F, _lastR, _lastG, _lastB);
             SendCommand("SetGamingLEDBehavior", KeyboardLedBehaviorWake);
             Thread.Sleep(30);
-            SendStaticLedPayload(mode: 0, speed: 0);
+            // Linuwu set_per_zone: commit static mode with RGB=0, then zone colours.
+            SendStaticLedPayload(mode: 0, speed: 0, includeRgbInPayload: false);
             Thread.Sleep(30);
             writeZones();
+            SendCommand("SetGamingLEDBehavior", KeyboardAllZones);
         }
 
         private static ulong PackStaticZoneColor(byte zoneMask, byte r, byte g, byte b) =>

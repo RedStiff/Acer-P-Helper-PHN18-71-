@@ -20,6 +20,17 @@ Thumbs.db
 # Research / probe runtime artifacts (do not ship)
 **/tools/**/*.log
 **/tools/**/nvcp_capture_*/
+**/tools/**/acer_service_capture_*/
+**/tools/**/acer_service_start_capture_*/
+**/tools/**/pnp_*_capture_*/
+**/tools/**/bios_mux_capture_*/
+**/tools/**/phn18_matrix_*/
+**/tools/**/pnp_matrix_*/
+**/tools/**/probe_final_*.log
+**/tools/**/bios_smoke_result.txt
+**/tools/**/bios_method_meta.txt
+**/tools/**/switch_gpu_test_result.txt
+**/tools/**/probe_matrix_run.log
 **/tools/**/probe_gpu_auto_summary_*.txt
 **/tools/**/*_console_latest.txt
 **/tools/**/nvcpl_exports_dump.txt

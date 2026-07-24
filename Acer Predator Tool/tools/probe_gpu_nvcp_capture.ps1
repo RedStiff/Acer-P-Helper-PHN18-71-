@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-  Interactive BEFORE/AFTER capture for NVIDIA Control Panel Display Mode (DDS).
+  Interactive BEFORE/AFTER capture for NVIDIA Display Mode (DDS) via NVIDIA App.
 
 .DESCRIPTION
   1) Saves BEFORE snapshot (fingerprint + NVIDIA registry + optional Acer misc GET)
-  2) Opens NVCP and waits for YOU to switch Display Mode
+  2) Waits for YOU to switch Display Mode (prefer NVIDIA App from system tray)
   3) Saves AFTER snapshot
   4) Writes a DIFF report of what changed
 
@@ -12,18 +12,24 @@
   .\probe_gpu_nvcp_capture.cmd
   .\probe_gpu_nvcp_capture.ps1
   .\probe_gpu_nvcp_capture.ps1 -TargetMode "Optimus"
+  .\probe_gpu_nvcp_capture.ps1 -UiSource AppLaunch
   .\probe_gpu_nvcp_capture.ps1 -RediffSessionDir .\nvcp_capture_20260711_223047
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('NVIDIA GPU only', 'Optimus', 'Automatic', 'Custom')]
     [string]$TargetMode = 'NVIDIA GPU only',
+    [ValidateSet('Tray', 'AppLaunch', 'ClassicNvcp', 'Skip')]
+    [string]$UiSource = 'Tray',
     [switch]$SkipAcerMisc,
     [switch]$SkipOpenNvcp,
     [string]$RediffSessionDir
 )
 
 . "$PSScriptRoot\_gpu_common.ps1"
+# _gpu_common enables StrictMode; capture needs quiet registry walks.
+Set-StrictMode -Off
+$ErrorActionPreference = 'SilentlyContinue'
 
 function Write-Cap {
     param(
@@ -43,10 +49,11 @@ function Get-RegFlatMap {
     $map = @{}
     function Walk([string]$Root, [int]$Depth) {
         if ($Depth -gt $MaxDepth) { return }
-        if (-not (Test-Path -LiteralPath $Root)) { return }
+        $rootPath = ConvertTo-PsRegistryPath -Path $Root
+        if (-not (Test-Path -LiteralPath $rootPath)) { return }
         try {
-            $item = Get-Item -LiteralPath $Root -ErrorAction Stop
-            $path = ($item.PSPath -replace '^Microsoft\.PowerShell\.Core\\Registry::', '')
+            $item = Get-Item -LiteralPath $rootPath -ErrorAction Stop
+            $path = ConvertTo-PsRegistryPath -Path $item.PSPath
             foreach ($vn in @($item.GetValueNames())) {
                 try {
                     $val = $item.GetValue($vn)
@@ -54,17 +61,18 @@ function Get-RegFlatMap {
                         elseif ($val -is [byte[]]) { (($val | ForEach-Object { '{0:X2}' -f $_ }) -join ' ') }
                         elseif ($val -is [Array]) { ($val -join ',') }
                         else { "$val" }
+                    if ($null -eq $shown) { $shown = '<null>' }
                     if ($shown.Length -gt 400) { $shown = $shown.Substring(0, 400) + '...' }
-                    $map["$path\$vn"] = $shown
+                    $name = if ([string]::IsNullOrEmpty($vn)) { '(default)' } else { $vn }
+                    $map["$path\$name"] = $shown
                 } catch { }
             }
-            Get-ChildItem -LiteralPath $Root -ErrorAction SilentlyContinue | ForEach-Object {
-                $child = ($_.PSPath -replace '^Microsoft\.PowerShell\.Core\\Registry::', '')
-                Walk $child ($Depth + 1)
+            Get-ChildItem -LiteralPath $rootPath -ErrorAction SilentlyContinue | ForEach-Object {
+                Walk -Root $_.PSPath -Depth ($Depth + 1)
             }
         } catch { }
     }
-    foreach ($r in $Roots) { Walk $r 0 }
+    foreach ($r in $Roots) { Walk -Root $r -Depth 0 }
     return $map
 }
 
@@ -135,9 +143,12 @@ function Get-CaptureSnapshot {
         'HKCU:\Software\NVIDIA Corporation',
         'HKLM:\SYSTEM\CurrentControlSet\Services\nvlddmkm',
         'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers',
-        'HKCU:\Software\Microsoft\DirectX'
+        'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}',
+        'HKCU:\Software\Microsoft\DirectX',
+        'HKCU:\Software\NVIDIA Corporation\Global',
+        'HKCU:\Software\NVIDIA Corporation\NVControlPanel2'
     )
-    $reg = Get-RegFlatMap -Roots $regRoots -MaxDepth 7
+    $reg = Get-RegFlatMap -Roots $regRoots -MaxDepth 8
     Write-Cap $LogPath ("  registry values captured: {0}" -f $reg.Count)
 
     $misc = @{}
@@ -178,7 +189,7 @@ function Save-Snapshot($Snap, [string]$Path) {
     $Snap | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
-function Build-DiffLines {
+function New-DiffLines {
     param($Before, $After, [string]$TargetMode)
     $lines = New-Object System.Collections.Generic.List[string]
     [void]$lines.Add("NVCP capture DIFF  $($Before.Timestamp)  ->  $($After.Timestamp)")
@@ -242,7 +253,7 @@ if ($RediffSessionDir) {
     }
     $before = Get-Content -LiteralPath $beforeJson -Raw -Encoding UTF8 | ConvertFrom-Json
     $after = Get-Content -LiteralPath $afterJson -Raw -Encoding UTF8 | ConvertFrom-Json
-    $built = Build-DiffLines -Before $before -After $after -TargetMode $TargetMode
+    $built = New-DiffLines -Before $before -After $after -TargetMode $TargetMode
     $built.Lines | Set-Content -LiteralPath $diffPath -Encoding UTF8
     foreach ($l in $built.Lines) {
         $color = [ConsoleColor]::Gray
@@ -267,10 +278,11 @@ Write-Cap $log ("session={0}" -f $sessionDir)
 Write-Cap $log ("target_mode={0} admin={1}" -f $TargetMode, (Test-IsAdmin))
 Write-Host ''
 Write-Host '========================================' -ForegroundColor Cyan
-Write-Host '  NVCP Display Mode CAPTURE' -ForegroundColor Cyan
+Write-Host '  NVIDIA App Display Mode CAPTURE' -ForegroundColor Cyan
 Write-Host '========================================' -ForegroundColor Cyan
 Write-Host "Folder: $sessionDir"
 Write-Host "Target: $TargetMode"
+Write-Host "UI:     $UiSource (tray preferred)"
 Write-Host ''
 
 $before = Get-CaptureSnapshot -Label 'BEFORE' -LogPath $log -SkipAcerMisc:$SkipAcerMisc
@@ -282,27 +294,26 @@ if ($before.MuxSignature -match 'owner=NVIDIA' -and $TargetMode -eq 'NVIDIA GPU 
     Write-Host 'NOTE: panel already on NVIDIA. For a clean switch-to-dGPU capture, start from Optimus.' -ForegroundColor Yellow
 }
 
-$nvcplui = "$env:ProgramFiles\NVIDIA Corporation\Control Panel Client\nvcplui.exe"
 Write-Host ''
-Write-Host '>>> YOUR STEPS <<<' -ForegroundColor Yellow
+Write-Host '>>> YOUR STEPS (NVIDIA App from tray) <<<' -ForegroundColor Yellow
 Write-Host '1. Close AcerPredatorTool / games if open.'
-Write-Host '2. In NVIDIA Control Panel go to:'
-Write-Host '     Display  ->  Manage Display Mode   (or Manage Power and Display mode)'
-Write-Host "3. Select:  $TargetMode"
-Write-Host '4. Confirm / Apply. Expect a short black screen (DDS switch).'
-Write-Host '5. Wait until desktop returns (~5-15s).'
-Write-Host '6. Come back HERE and press Enter.'
+Write-Host '2. Open NVIDIA App from the system tray (NVIDIA icon).'
+Write-Host '   (Desktop context menu is OK too, but tray is preferred.)'
+Write-Host '3. Go to Display Mode / Manage Display Mode'
+Write-Host "4. Select:  $TargetMode"
+Write-Host '5. Confirm / Apply. Expect a short black screen (DDS switch).'
+Write-Host '6. Wait until desktop returns (~5-15s).'
+Write-Host '7. Come back HERE and press Enter.'
 Write-Host ''
 
-if (-not $SkipOpenNvcp -and (Test-Path $nvcplui)) {
-    try {
-        Start-Process $nvcplui | Out-Null
-        Write-Cap $log 'Opened nvcplui.exe' Cyan
-    } catch {
-        Write-Cap $log ("Could not open NVCP: {0}" -f $_.Exception.Message) Yellow
-    }
+if ($SkipOpenNvcp -or $UiSource -eq 'Skip') {
+    Write-Cap $log 'Skip UI launch - open NVIDIA App from tray yourself.' Yellow
 } else {
-    Write-Host "Open manually: $nvcplui"
+    $opened = Open-NvidiaDisplayModeUi -Source $UiSource
+    Write-Cap $log ("UI: Ok={0} method={1} detail={2}" -f $opened.Ok, $opened.Method, $opened.Detail) Cyan
+    if ($opened.Method -eq 'wait_tray') {
+        Write-Host $opened.Detail -ForegroundColor Yellow
+    }
 }
 
 Write-Host ''
@@ -316,7 +327,7 @@ Save-Snapshot $after $afterJson
 Write-Cap $log ("AFTER mux={0}" -f $after.MuxSignature) Green
 
 try {
-    $built = Build-DiffLines -Before $before -After $after -TargetMode $TargetMode
+    $built = New-DiffLines -Before $before -After $after -TargetMode $TargetMode
     $built.Lines | Set-Content -LiteralPath $diffPath -Encoding UTF8
     foreach ($l in $built.Lines) {
         $color = [ConsoleColor]::Gray
@@ -346,4 +357,4 @@ Write-Host '========================================' -ForegroundColor Cyan
 
 Write-Cap $log ("DONE. Diff: {0}" -f $diffPath) Green
 Write-Host ''
-pause
+$null = Read-Host 'Press Enter to close'

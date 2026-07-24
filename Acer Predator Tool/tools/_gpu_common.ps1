@@ -10,7 +10,7 @@ function Test-IsAdmin {
     return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Ensure-Admin {
+function Confirm-GpuAdmin {
     if (Test-IsAdmin) { return $true }
     Write-Host 'ERROR: Administrator required for AcerGamingFunction WMI.' -ForegroundColor Red
     Write-Host 'Right-click PowerShell -> Run as administrator, then re-run the script.'
@@ -31,6 +31,19 @@ function Write-GpuLog {
     $line = '[{0:HH:mm:ss}] {1}' -f (Get-Date), $Message
     Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
     Write-Host $line -ForegroundColor $Color
+}
+
+function ConvertTo-PsRegistryPath {
+    param([Parameter(Mandatory)][string]$Path)
+    # Child PSPath becomes HKEY_LOCAL_MACHINE\... which Test-Path rejects.
+    $p = $Path
+    $p = $p -replace '^Microsoft\.PowerShell\.Core\\Registry::', ''
+    $p = $p -replace '^Registry::', ''
+    $p = $p -replace '^HKEY_LOCAL_MACHINE\\', 'HKLM:\'
+    $p = $p -replace '^HKEY_CURRENT_USER\\', 'HKCU:\'
+    $p = $p -replace '^HKEY_CLASSES_ROOT\\', 'HKCR:\'
+    $p = $p -replace '^HKEY_USERS\\', 'HKU:\'
+    return $p
 }
 
 function Get-AcerGaming {
@@ -91,7 +104,7 @@ function Set-MiscSetting {
     }
 }
 
-function Ensure-DisplayEnumHelper {
+function Initialize-DisplayEnumHelper {
     if ('DisplayEnumProbe' -as [type]) { return }
     Add-Type -TypeDefinition @'
 using System;
@@ -189,7 +202,7 @@ public static class DisplayEnumProbe
 }
 
 function Get-DisplayAdapterSnapshot {
-    Ensure-DisplayEnumHelper
+    Initialize-DisplayEnumHelper
     return [DisplayEnumProbe]::Snapshot()
 }
 
@@ -292,6 +305,89 @@ function Write-GpuFingerprint {
     }
     foreach ($v in @($Fp.VideoControllers)) {
         Write-GpuLog $LogPath ("  Win32: {0} status={1}" -f $v.Name, $v.Status)
+    }
+}
+
+function Get-NvidiaAppProcesses {
+    # Tray / CEF host may appear as "NVIDIA App" or nvcplui.
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($p in @(Get-Process -ErrorAction SilentlyContinue)) {
+        if ($p.ProcessName -eq 'nvcplui' -or $p.ProcessName -eq 'NVIDIA App') {
+            [void]$out.Add($p)
+            continue
+        }
+        try {
+            $path = $p.Path
+            if ($path -and $path -match 'NVIDIA Corporation\\NVIDIA App') {
+                [void]$out.Add($p)
+            }
+        } catch { }
+    }
+    return @($out)
+}
+
+function Open-NvidiaDisplayModeUi {
+    <#
+    .SYNOPSIS
+      Open or detect UI for Display Mode DDS.
+      Preferred path on PHN18: NVIDIA App from system tray.
+      Avoid Control Panel Client nvcplui.exe without CEF working directory - missing libcef.
+    #>
+    param(
+        [ValidateSet('Tray', 'AppLaunch', 'ClassicNvcp')]
+        [string]$Source = 'Tray',
+        [switch]$ForceRestart
+    )
+
+    $classicAppId = 'NVIDIACorp.NVIDIAControlPanel_56jybvy8sckqj!NVIDIACorp.NVIDIAControlPanel'
+    $nvidiaAppExe = Join-Path $env:ProgramFiles 'NVIDIA Corporation\NVIDIA App\CEF\NVIDIA App.exe'
+    $nvidiaAppCwd = Join-Path $env:ProgramFiles 'NVIDIA Corporation\NVIDIA App\CEF'
+    $brokenStub = Join-Path $env:ProgramFiles 'NVIDIA Corporation\Control Panel Client\nvcplui.exe'
+
+    if (-not $ForceRestart) {
+        $running = @(Get-NvidiaAppProcesses)
+        if ($running.Count -gt 0) {
+            return [pscustomobject]@{
+                Ok = $true
+                Method = 'already_running'
+                Detail = (($running | ForEach-Object { $_.ProcessName }) -join ',')
+            }
+        }
+    }
+
+    if ($Source -eq 'Tray') {
+        # Do not auto-launch: tray activation is what the user actually uses.
+        return [pscustomobject]@{
+            Ok = $true
+            Method = 'wait_tray'
+            Detail = 'Open NVIDIA App from the system tray (NVIDIA icon), then continue.'
+        }
+    }
+
+    if ($Source -eq 'AppLaunch') {
+        if ((Test-Path -LiteralPath $nvidiaAppExe) -and (Test-Path -LiteralPath $nvidiaAppCwd)) {
+            try {
+                Start-Process -FilePath $nvidiaAppExe -WorkingDirectory $nvidiaAppCwd -ErrorAction Stop | Out-Null
+                return [pscustomobject]@{ Ok = $true; Method = 'nvidia_app_cef'; Detail = $nvidiaAppExe }
+            } catch {
+                return [pscustomobject]@{ Ok = $false; Method = 'nvidia_app_cef'; Detail = $_.Exception.Message }
+            }
+        }
+    }
+
+    if ($Source -eq 'ClassicNvcp') {
+        try {
+            Start-Process ("shell:AppsFolder\{0}" -f $classicAppId) -ErrorAction Stop | Out-Null
+            return [pscustomobject]@{ Ok = $true; Method = 'classic_nvcp_uwp'; Detail = $classicAppId }
+        } catch {
+            return [pscustomobject]@{ Ok = $false; Method = 'classic_nvcp_uwp'; Detail = $_.Exception.Message }
+        }
+    }
+
+    return [pscustomobject]@{
+        Ok = $false
+        Method = 'none'
+        Detail = ("Open NVIDIA App from tray. Avoid stub without CEF cwd: {0}" -f $brokenStub)
     }
 }
 

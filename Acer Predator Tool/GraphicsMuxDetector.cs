@@ -5,7 +5,7 @@ namespace PredatorControlApp
 {
     /// <summary>
     /// Detects which GPU owns the primary laptop panel (DDS / Advanced Optimus result).
-    /// Does not switch modes — NVIDIA Display Mode has no supported public SET API.
+    /// Switching is performed by <see cref="GpuControlService"/> (PnP + NVIDIA App SetDDSState), not Acer WMI.
     /// </summary>
     [SupportedOSPlatform("windows")]
     internal static class GraphicsMuxDetector
@@ -48,6 +48,15 @@ namespace PredatorControlApp
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern bool EnumDisplayDevices(
             string? lpDevice, uint iDevNum, ref DisplayDevice lpDisplayDevice, uint dwFlags);
+
+        public static void InvalidateCache()
+        {
+            lock (Sync)
+            {
+                _cachedAtMs = 0;
+                _cachedOwner = PanelOwner.Unknown;
+            }
+        }
 
         public static PanelOwner DetectPanelOwner()
         {

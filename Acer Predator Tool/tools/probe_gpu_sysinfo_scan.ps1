@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
   Automatic GetGamingSysInfo / GetGamingProfileSetting scan for GPU-mode clues.
@@ -6,7 +6,7 @@
 .DESCRIPTION
   Read-only by default. With -Apply: for each SysInfo input that returns a small
   enum-like value (0..3), try SetGamingProfile / SetGamingProfileSetting candidates
-  carefully — only if -ApplyProfileWrites is also set (more invasive).
+  carefully вЂ” only if -ApplyProfileWrites is also set (more invasive).
 
   Default -Apply only re-reads after no-op; use -ApplyMiscFocus separately for misc SET.
 
@@ -22,7 +22,7 @@ param(
 
 . "$PSScriptRoot\_gpu_common.ps1"
 
-if (-not (Ensure-Admin)) { exit 1 }
+if (-not (Confirm-GpuAdmin)) { exit 1 }
 
 $log = New-GpuLog 'probe_gpu_sysinfo_scan'
 Write-GpuLog $log '=== GetGamingSysInfo / ProfileSetting scan ===' Green

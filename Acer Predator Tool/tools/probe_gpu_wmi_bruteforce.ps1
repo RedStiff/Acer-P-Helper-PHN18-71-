@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
   Automatic Acer WMI misc candidate probe for GPU mux (Integrated/Auto/Discrete).
@@ -40,7 +40,7 @@ param(
 
 . "$PSScriptRoot\_gpu_common.ps1"
 
-if (-not (Ensure-Admin)) { exit 1 }
+if (-not (Confirm-GpuAdmin)) { exit 1 }
 
 $log = New-GpuLog 'probe_gpu_wmi_bruteforce'
 Write-GpuLog $log '=== GPU WMI misc bruteforce ===' Green
@@ -196,5 +196,5 @@ Write-GpuLog $log ("DONE. Log: {0}" -f $log) Green
 Write-Host ''
 Write-Host "Log: $log" -ForegroundColor Cyan
 if ($changedHits.Count -gt 0) {
-    Write-Host 'Hits found — see log SUMMARY.' -ForegroundColor Green
+    Write-Host 'Hits found вЂ” see log SUMMARY.' -ForegroundColor Green
 }

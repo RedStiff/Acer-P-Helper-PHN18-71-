@@ -24,7 +24,7 @@ param(
 
 . "$PSScriptRoot\_gpu_common.ps1"
 
-if (-not (Ensure-Admin)) { exit 1 }
+if (-not (Confirm-GpuAdmin)) { exit 1 }
 
 $master = New-GpuLog 'probe_gpu_switch'
 Write-GpuLog $master '=== probe_gpu_switch master ===' Green
